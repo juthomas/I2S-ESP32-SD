@@ -23,12 +23,13 @@ void setup() {
     SPI.begin(SPI_SCK, SPI_MISO, SPI_MOSI);
     Serial.begin(115200);
     SD.begin(SD_CS);
-    WiFi.disconnect();
-    WiFi.mode(WIFI_STA);
-    WiFi.begin(ssid.c_str(), password.c_str());
-    while (WiFi.status() != WL_CONNECTED) delay(1500);
+    // WiFi.disconnect();
+    // WiFi.mode(WIFI_STA);
+    // WiFi.begin(ssid.c_str(), password.c_str());
+    // while (WiFi.status() != WL_CONNECTED) delay(1500);
     audio.setPinout(I2S_BCLK, I2S_LRC, I2S_DOUT);
-    audio.setVolume(21); // default 0...21
+    audio.setVolumeSteps(4095);
+    audio.setVolume(4095); // default 0...21
 //  or alternative
 //  audio.setVolumeSteps(64); // max 255
 //  audio.setVolume(63);    
@@ -66,15 +67,33 @@ void setup() {
 
 bool need_to_play = true;
 
+uint16_t current_Volume = 4095;
+
 void loop()
 {
     audio.loop();
+    static bool low_volume = false;
     if (need_to_play)
     {
         need_to_play = false;
-        audio.connecttoFS(SD, "/HATEFUL LOVE.mp3");
-
+        // audio.connecttoFS(SD, "/Synthwave.mp3");
+        // audio.connecttoFS(SD, "/lofi.mp3");
+        // audio.connecttoFS(SD, "/HATEFUL LOVE.mp3");
+        // audio.connecttoFS(SD, "/flute-s1.aif");
+        // audio.connecttoFS(SD, "/cantos.wav");
+        // audio.connecttoFS(SD, "/IKE_CHANT_AUX_CHIENS.wav");
+        // audio.connecttoFS(SD, "/inuit.wav");
+        audio.connecttoFS(SD, "/fab-vinz.wav");
+        audio.setVolume(low_volume ? 10 : 21); // default 0...21
+        low_volume = !low_volume;
     }
+    // uint16_t potentiometer = analogRead(34);
+    // if (potentiometer <= current_Volume - 100 || potentiometer >= current_Volume + 100)
+    // {
+    //     current_Volume =  potentiometer;
+    //     audio.setVolume(current_Volume);
+    //     Serial.printf("Volume changed to : %d\n", current_Volume);
+    // }
 }
 
 // optional
