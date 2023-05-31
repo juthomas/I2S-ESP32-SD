@@ -33,12 +33,25 @@ Les signaux UDP peuvent être testés et envoyés grâve à la commande `nc -u 1
 
 ## Configuration réseau
 
-Variables réseau à renseigner :
-- **ssid** : nom du routeur
-- **password** : mot du passe du router
-- **ip** : ip statique local desirée pour l'esp32
-- **gateway** : ip du routeur
-- **localPort** : port utilisé pour la réception des messages UDP
+### Configuration Wi-Fi
+Vous devez spécifier les détails de votre réseau Wi-Fi :
+
+```cpp
+String ssid =  "NomDuRouteur"; // Nom du réseau Wi-Fi
+String password = "MotDePasse";   // Mot de passe du réseau Wi-Fi
+```
+Vous pouvez décommenter l'une des lignes ssid et pass en fonction de votre réseau, ou les modifier pour correspondre à votre réseau personnel.
+
+### Configuration de l'adresse IP
+Si vous souhaitez utiliser une adresse IP statique pour l'ESP32, vous pouvez la configurer en modifiant les lignes suivantes :
+
+```cpp
+IPAddress ip(192, 168, 0, 215);    // Adresse IP locale (statique)
+IPAddress gateway(192, 168, 0, 1); // Adresse IP du routeur
+const unsigned int localPort = 8266; // Port de réception UDP
+IPAddress subnet(255, 255, 255, 0); // Masque de sous-réseau
+```
+Assurez-vous de spécifier les bonnes adresses IP pour votre réseau.
 
 ## Variables de configuration
 - **loop_file** : Booléen (true/false) : indique si la lecture des fichiers audio doit être en boucle par défaut.
