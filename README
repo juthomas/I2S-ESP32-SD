@@ -1,14 +1,14 @@
-# Lecteur Wav/Mp3/m4a Avec des signaux UDP
+#Lecteur Wav/Mp3/m4a Avec des signaux UDP
 Ce projet est un lecteur audio qui permet de lire des fichiers audio au format WAV, MP3 et M4A à partir d'une carte SD. Il utilise des signaux UDP pour contrôler la lecture audio à distance.
 
-## Dépendances
+##Dépendances
 Ce projet dépend de la bibliothèque ESP32-audioI2S, disponible à l'adresse suivante : https://github.com/schreibfaul1/ESP32-audioI2S
 
-## Configuration requise
+##Configuration requise
 La carte SD doit être formatée en FAT16 ou FAT32. Pour le format FAT32, il est recommandé d'utiliser l'outil de formatage disponible à l'adresse : https://www.sdcard.org/downloads/formatter/
 Les fichiers audio doivent être placés à la racine de la carte SD.
 
-## Signaux UDP pris en charge
+##Signaux UDP pris en charge
 Le lecteur audio peut être contrôlé à l'aide des signaux UDP suivants :
 
 - **Track** : `0` à `nombre de tracks audios` : permet de sélectionner la piste audio à lire.
