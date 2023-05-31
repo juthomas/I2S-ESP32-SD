@@ -1,31 +1,66 @@
+// Lecteur Wav/Mp3/m4a Avec des signaux UDP
+// Dependance : https://github.com/schreibfaul1/ESP32-audioI2S
+//
+// La carte Sd doit etre formatée soit en FAT16 soit en FAT32
+// pour le format FAT32, il faut formatter la carte sd avec cet outil:
+// https://www.sdcard.org/downloads/formatter/
+//
+// Les fichiers audios sont à mettre à la racine de la carte SD
+//
+// Les Signaux UDP possibles sont :
+//
+// Track : "0" à nombre de tracks audios
+//
+// Volume : "V 0" à "V 255"
+//
+// Pause/Resume : "P" pour alterner en pause et reprendre la lecteur,
+// "P 0" pour mettre en pause, "P 1" pour reprendre la lecture.
+//
+// Loop file : "L" pour alterner en looper et ne pas looper,
+// "L 0" pour ne pas looper, "L 1" pour looper.
+//
+// Balance : "B -16" à "B 16"
+//
+// Jump : "J 60" pour aller à un endroit specifique dans la track,
+// 60 = 60 secondes
+//
+// Tonality : "T -40 0 6" fonctionne comme un equilibreur,
+// le premier nombre est le gain pour les graves,
+// le deuxieme pour les médiums et le troisieme pour les aigus,
+// le gain va de -40 à 6 (en dB)
+
 #include "Arduino.h"
 #include "WiFi.h"
 #include "Audio.h"
 #include "SD.h"
 #include "FS.h"
 
-// Digital I/O used
+// branchement Carte SD
 #define SD_CS 5
 #define SPI_MOSI 23
 #define SPI_MISO 19
 #define SPI_SCK 18
-#define I2S_DOUT 25 //
-#define I2S_BCLK 27 //
-#define I2S_LRC 26  //
 
-Audio audio;
+// Branchement Amplificateur I2S
+#define I2S_DOUT 25
+#define I2S_BCLK 27
+#define I2S_LRC 26
 
-String ssid = "SFR_B4C8";
-String password = "enorksenez3vesterish";
+String ssid = "SFR_B4C8";                 // nom du routeur
+String password = "enorksenez3vesterish"; // mot de passe
 
 IPAddress ip(192, 168, 0, 225);      // Local IP (static)
 IPAddress gateway(192, 168, 0, 1);   // Router IP
-const unsigned int localPort = 8266; // port
+const unsigned int localPort = 8266; // port de reception UDP
 IPAddress subnet(255, 255, 255, 0);
-WiFiUDP udp;
 
-const boolean DEBUG = true; // baud rate : 115200
+bool loop_file = true;               // Default loop audio files
+const bool REQUEST_STATIC_IP = false; // Demander l'attribution d'une ip statique
+const bool AUTO_PLAY_TRACK = true;    // Lit la premiere track au demarrage
+const bool DEBUG = true;              // Afficher les messages dans la console
 std::vector<std::string> files_list;
+Audio audio;
+WiFiUDP udp;
 
 std::vector<std::string> listSdFiles(const char *dirname)
 {
@@ -52,7 +87,7 @@ std::vector<std::string> listSdFiles(const char *dirname)
             break;
         }
         String nameString = String(entry.name());
-        if (!nameString.startsWith("/.") && (nameString.endsWith(".wav") || nameString.endsWith(".mp3") ))
+        if (!nameString.startsWith("/.") && (nameString.endsWith(".wav") || nameString.endsWith(".mp3")))
         {
             // Afficher le nom du fichier
             Serial.println(entry.name());
@@ -73,7 +108,6 @@ void setup()
     digitalWrite(SD_CS, HIGH);
     SPI.begin(SPI_SCK, SPI_MISO, SPI_MOSI);
     Serial.begin(115200);
-    // SD.begin(SD_CS);
     if (!SD.begin(SD_CS))
     {
         Serial.println("initialization failed!");
@@ -82,9 +116,11 @@ void setup()
     }
     Serial.println("initialization done.");
 
-    // WiFi.disconnect();
     WiFi.mode(WIFI_STA);
-    // WiFi.config(ip, gateway, subnet); // Static IP Address
+    if (REQUEST_STATIC_IP)
+    {
+        WiFi.config(ip, gateway, subnet); // Static IP Address
+    }
     WiFi.begin(ssid.c_str(), password.c_str());
 
     while (WiFi.status() != WL_CONNECTED)
@@ -100,48 +136,17 @@ void setup()
         Serial.println(WiFi.localIP());
     }
 
-    // while (WiFi.status() != WL_CONNECTED) delay(1500);
     audio.setPinout(I2S_BCLK, I2S_LRC, I2S_DOUT);
-    // audio.setVolumeSteps(4095);
-    audio.setVolume(5); // default 0...21
     files_list = listSdFiles("/");
 
-    printf("test : %s\n", files_list[1].c_str());
-    audio.connecttoFS(SD, files_list[1].c_str());
+    // printf("test : %s\n", files_list[1].c_str());
+    if (AUTO_PLAY_TRACK)
+    {
+        audio.connecttoFS(SD, files_list[0].c_str());
+    }
 
-    //  or alternative
-     audio.setVolumeSteps(255); // max 255
-     audio.setVolume(63);
-    //
-    //  *** radio streams ***
-    // audio.connecttohost("http://stream.antennethueringen.de/live/aac-64/stream.antennethueringen.de/"); // aac
-    //  audio.connecttohost("http://mcrscast.mcr.iol.pt/cidadefm");                                         // mp3
-    //  audio.connecttohost("http://www.wdr.de/wdrlive/media/einslive.m3u");                                // m3u
-    //  audio.connecttohost("https://stream.srg-ssr.ch/rsp/aacp_48.asx");                                   // asx
-    //  audio.connecttohost("http://tuner.classical102.com/listen.pls");                                    // pls
-    //  audio.connecttohost("http://stream.radioparadise.com/flac");                                        // flac
-    //  audio.connecttohost("http://stream.sing-sing-bis.org:8000/singsingFlac");                           // flac (ogg)
-    //  audio.connecttohost("http://s1.knixx.fm:5347/dein_webradio_vbr.opus");                              // opus (ogg)
-    //  audio.connecttohost("http://stream2.dancewave.online:8080/dance.ogg");                              // vorbis (ogg)
-    //  audio.connecttohost("http://26373.live.streamtheworld.com:3690/XHQQ_FMAAC/HLSTS/playlist.m3u8");    // HLS
-    //  audio.connecttohost("http://eldoradolive02.akamaized.net/hls/live/2043453/eldorado/master.m3u8");   // HLS (ts)
-    //  *** web files ***
-    //  audio.connecttohost("https://github.com/schreibfaul1/ESP32-audioI2S/raw/master/additional_info/Testfiles/Pink-Panther.wav");        // wav
-    //  audio.connecttohost("https://github.com/schreibfaul1/ESP32-audioI2S/raw/master/additional_info/Testfiles/Santiano-Wellerman.flac"); // flac
-    //  audio.connecttohost("https://github.com/schreibfaul1/ESP32-audioI2S/raw/master/additional_info/Testfiles/Olsen-Banden.mp3");        // mp3
-    //  audio.connecttohost("https://github.com/schreibfaul1/ESP32-audioI2S/raw/master/additional_info/Testfiles/Miss-Marple.m4a");         // m4a (aac)
-    //  audio.connecttohost("https://github.com/schreibfaul1/ESP32-audioI2S/raw/master/additional_info/Testfiles/Collide.ogg");             // vorbis
-    //  audio.connecttohost("https://github.com/schreibfaul1/ESP32-audioI2S/raw/master/additional_info/Testfiles/sample.opus");             // opus
-    //  *** local files ***
-    //  audio.connecttoFS(SD, "/audio.wav");     // SD
-    // audio.connecttoFS(SD, "/Little London Girl(lyrics).mp3");
-    // audio.connecttoFS(SD, "/Synthwave.mp3");
-    // audio.connecttoFS(SD, "/lofi.mp3");
-    // audio.connecttoFS(SD, "/HATEFUL LOVE.mp3"); z
-    //  audio.connecttoFS(SD_MMC, "/test.wav"); // SD_MMC
-    //  audio.connecttoFS(SPIFFS, "/test.wav"); // SPIFFS
-
-    //  audio.connecttospeech("Wenn die Hunde schlafen, kann der Wolf gut Schafe stehlen.", "de"); // Google TTS
+    audio.setVolumeSteps(255); // max 255
+    audio.setVolume(63);
 }
 
 bool need_to_play = true;
@@ -150,7 +155,7 @@ uint16_t current_Volume = 4095;
 char packetBuffer[255]; // Incoming
 
 // Méthode pour découper le message avec un séparateur (ou "parser")
-void splitString(String message, char separator, String data[2])
+void splitString(String message, char separator, String data[5])
 {
 
     int index = 0;
@@ -195,16 +200,20 @@ void loop()
         }
         Serial.printf("Data : %s\n", packetBuffer);
         String strData(packetBuffer);
-        String data[2]; // Store incoming data
+        String data[5]; // Store incoming data
 
         splitString(strData, ' ', data);
         if (data[0].c_str()[0] == 'V')
         {
+            // Volume
+            // "V 0" to "V 255"
             Serial.printf("Set Volume to : %d\n", data[1].toInt());
-             audio.setVolume(data[1].toInt());
+            audio.setVolume(data[1].toInt());
         }
         else if (data[0].c_str()[0] == 'P')
         {
+            // Pause / Resume
+            // "P" or "P 0" or "P 1"
             int8_t action = -1;
             if (data[1] != "")
             {
@@ -223,27 +232,63 @@ void loop()
         }
         else if (data[0].c_str()[0] == 'L')
         {
-            
-            audio.setFileLoop(true);
-            audio.
-            // int8_t action = -1;
-            // if (data[1] != "")
-            // {
-            //     Serial.printf("Second argument is %d\n", data[1].toInt());
-            //     action = data[1].toInt();
-            // }
-            // if ((action == 0 && audio.isRunning()) || (action == 1 && !audio.isRunning()) || action == -1)
-            // {
-            //     audio.pauseResume();
-            //     Serial.printf("Music %s\n", audio.isRunning() ? "Resumed" : "Paused");
-            // }
-            // else
-            // {
-            //     Serial.printf("Music allready %s\n", audio.isRunning() ? "Resumed" : "Paused");
-            // }
+            // Loop file
+            // "L" or "L 0" or "L 1"
+            int8_t action = -1;
+            if (data[1] != "")
+            {
+                Serial.printf("Second argument is %d\n", data[1].toInt());
+                action = data[1].toInt();
+            }
+            if ((action == -1 && loop_file == false) || action == 1)
+            {
+                audio.setFileLoop(true);
+                loop_file = true;
+                Serial.printf("File loop activated\n");
+            }
+            else if ((action == -1 && loop_file == true) || action == 0)
+            {
+                audio.setFileLoop(false);
+                loop_file = false;
+                Serial.printf("File loop deactivated\n");
+            }
+            else
+            {
+                Serial.printf("File loop unchanged (%d)\n", loop_file);
+            }
+        }
+        else if (data[0].c_str()[0] == 'B')
+        {
+            // Balance
+            // "B -16" to "B 16"
+            //-16 to 16
+            audio.setBalance(data[1].toInt());
+            Serial.printf("Balance set to \n", data[1].toInt());
+        }
+        else if (data[0].c_str()[0] == 'J')
+        {
+            // Jump at position in audio file
+            //"J 500" jump in audio file to time
+            audio.setAudioPlayPosition(data[1].toInt());
+            Serial.printf("Jump in audio file to %dsecs \n", data[1].toInt());
+        }
+        // else if (data[0].c_str()[0] == 'J')
+        // {
+        //     //"J 500" jump in audio file to time
+        //     audio.setAudioPlayPosition(data[1].toInt());
+        //     Serial.printf("Jump in audio file to %dsecs \n", data[1].toInt());
+        // }
+        else if (data[0].c_str()[0] == 'T')
+        {
+            // Set Tonality (more like an equalizer)
+            //"T -40 0 6" values can be between -40 ... +6 (dB)
+            audio.setTone(data[1].toInt(), data[2].toInt(), data[3].toInt());
+            Serial.printf("Tone set to low:%d band:%d high:%d\n", data[1].toInt(), data[2].toInt(), data[3].toInt());
         }
         else
         {
+            // Play track
+            //"0" to "N" number of tracks in playlist
             uint16_t audio_to_play = data[0].toInt();
             if (files_list.size() > audio_to_play)
             {
@@ -254,31 +299,12 @@ void loop()
             {
                 printf("Sound number %d is out of range\n", audio_to_play);
             }
+            if (loop_file)
+            {
+                audio.setFileLoop(true);
+            }
         }
-        // analogWrite(data[0].toInt(), data[1].toInt());
     }
-    // static bool low_volume = false;
-    // if (need_to_play)
-    // {
-    //     need_to_play = false;
-    //     // audio.connecttoFS(SD, "/Synthwave.mp3");
-    //     // audio.connecttoFS(SD, "/lofi.mp3");
-    //     // audio.connecttoFS(SD, "/HATEFUL LOVE.mp3");
-    //     // audio.connecttoFS(SD, "/flute-s1.aif");
-    //     // audio.connecttoFS(SD, "/cantos.wav");
-    //     // audio.connecttoFS(SD, "/IKE_CHANT_AUX_CHIENS.wav");
-    //     // audio.connecttoFS(SD, "/inuit.wav");
-    //     audio.connecttoFS(SD, "/fab-vinz.wav");
-    //     // audio.setVolume(low_volume ? 10 : 21); // default 0...21
-    //     low_volume = !low_volume;
-    // }
-    // uint16_t potentiometer = analogRead(34);
-    // if (potentiometer <= current_Volume - 100 || potentiometer >= current_Volume + 100)
-    // {
-    //     current_Volume =  potentiometer;
-    //     audio.setVolume(current_Volume);
-    //     Serial.printf("Volume changed to : %d\n", current_Volume);
-    // }
 }
 
 // optional
