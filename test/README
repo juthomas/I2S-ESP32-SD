@@ -1,11 +1,47 @@
+# Lecteur Wav/Mp3/m4a Avec des signaux UDP
+Ce projet est un lecteur audio qui permet de lire des fichiers audio au format WAV, MP3 et M4A à partir d'une carte SD. Il utilise des signaux UDP pour contrôler la lecture audio à distance.
 
-This directory is intended for PlatformIO Test Runner and project tests.
+## Dépendances
+Ce projet dépend de la bibliothèque ESP32-audioI2S, disponible à l'adresse suivante : https://github.com/schreibfaul1/ESP32-audioI2S
 
-Unit Testing is a software testing method by which individual units of
-source code, sets of one or more MCU program modules together with associated
-control data, usage procedures, and operating procedures, are tested to
-determine whether they are fit for use. Unit testing finds problems early
-in the development cycle.
+## Configuration requise
+La carte SD doit être formatée en FAT16 ou FAT32. Pour le format FAT32, il est recommandé d'utiliser l'outil de formatage disponible à l'adresse : https://www.sdcard.org/downloads/formatter/
+Les fichiers audio doivent être placés à la racine de la carte SD.
 
-More information about PlatformIO Unit Testing:
-- https://docs.platformio.org/en/latest/advanced/unit-testing/index.html
+## Signaux UDP pris en charge
+Le lecteur audio peut être contrôlé à l'aide des signaux UDP suivants :
+
+- **Track** : `0` à `nombre de tracks audios` : permet de sélectionner la piste audio à lire.
+- **Volume** : `V 0` à `V 255` : permet de régler le volume de lecture.
+- **Pause/Reprise** : `P` : alterne entre la pause et la reprise de la lecture. `P 0` met en pause la lecture et `P 1` reprend la lecture.
+- **Loop file** : `L` : alterne entre le mode de lecture en boucle et le mode de lecture unique. `L 0` désactive la lecture en boucle et `L 1` active la lecture en boucle.
+- **Balance** : `B -16` à `B 16` : permet de régler l'équilibre audio entre les canaux gauche et droit.
+- **Jump** : `J 60` : permet de sauter à un endroit spécifique dans la piste audio. Le nombre spécifié représente le nombre de secondes.
+- **Tonality** : `T -40 0 6` : fonctionne comme un égaliseur, où le premier nombre correspond au gain pour les graves, le deuxième pour les médiums et le troisième pour les aigus. Le gain peut varier de -40 à 6 (en dB).
+
+Les signaux UDP peuvent être testés et envoyés grâve à la commande `nc -u 192.168.1.96 8266` où l'ip et le port de l'esp32 sont à renseigner
+## Branchements
+- Carte SD :
+	- **CS** : Broche 5
+	- **MOSI** : Broche 23
+	- **MISO** : Broche 19
+	- **SCK** : Broche 18
+- Amplificateur I2S :
+	- **DOUT** : Broche 25
+	- **BCLK** : Broche 27
+	- **LRC** : Broche 26
+
+## Configuration réseau
+
+Variables réseau à renseigner :
+- **ssid** : nom du routeur
+- **password** : mot du passe du router
+- **ip** : ip statique local desirée pour l'esp32
+- **gateway** : ip du routeur
+- **localPort** : port utilisé pour la réception des messages UDP
+
+## Variables de configuration
+- **loop_file** : Booléen (true/false) : indique si la lecture des fichiers audio doit être en boucle par défaut.
+- **REQUEST_STATIC_IP** : Booléen (true/false) : demande l'attribution d'une adresse IP statique.
+- **AUTO_PLAY_TRACK** : Booléen (true/false) : lit automatiquement la première piste audio au démarrage.
+- **DEBUG** : Booléen (true/false) : affiche les messages de débogage dans la console.
