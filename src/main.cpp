@@ -80,7 +80,7 @@ typedef struct s_music_data
 String note = "";
 uint8_t volume;
 std::vector<t_music_data> music_data;
-std::vector<std::string> files_list;
+std::vector<String> files_list;
 Audio audio;
 WiFiUDP udp;
 AsyncWebServer server(80);
@@ -271,9 +271,9 @@ void load_spiffs()
     }
 }
 
-std::vector<std::string> listSdFiles(const char *dirname)
+std::vector<String> listSdFiles(const char *dirname)
 {
-    std::vector<std::string> fileList;
+    std::vector<String> fileList;
 
     // Ouvrir le répertoire spécifié
     File root = SD.open(dirname);
@@ -300,7 +300,7 @@ std::vector<std::string> listSdFiles(const char *dirname)
         {
             // Afficher le nom du fichier
             Serial.println(entry.name());
-            fileList.push_back(std::string(entry.name()));
+            fileList.push_back(String(entry.name()));
         }
         // Fermer le fichier
         entry.close();
@@ -361,6 +361,28 @@ void setup()
     //     handleFileUpload);
     server.on("/data", HTTP_GET, [](AsyncWebServerRequest *request)
               {Serial.printf("Json demandé par le site\n");request->send(200, "application/json", local_vars_to_json()); });
+    server.on("/play", HTTP_POST, [](AsyncWebServerRequest *request)
+              {
+                  int params = request->params();
+                  Serial.printf("params nu :%d\n", params);
+                  for (int i = 0; i < params; i++)
+                  {
+                      AsyncWebParameter *p = request->getParam(i);
+                      if (p->isFile())
+                      { // p->isPost() is also true
+                          Serial.printf("FILE[%s]: %s, size: %u\n", p->name().c_str(), p->value().c_str(), p->size());
+                      }
+                      else if (p->isPost())
+                      {
+                          Serial.printf("POST[%s]: %s\n", p->name().c_str(), p->value().c_str());
+                      }
+                      else
+                      {
+                          Serial.printf("GET[%s]: %s\n", p->name().c_str(), p->value().c_str());
+                      }
+                  }
+              });
+
     server.onFileUpload(handleFileUpload);
     // server.on("/edit", HTTP_POST, handleFileUpload2);
 
@@ -375,7 +397,13 @@ void setup()
 
     audio.setPinout(I2S_BCLK, I2S_LRC, I2S_DOUT);
     files_list = listSdFiles("/");
+    music_data.clear();
 
+    for (std::vector<String>::size_type i = 0; i != files_list.size(); i++)
+    {
+        music_data.push_back((t_music_data){.path = files_list[i],
+                                            .index = i});
+    }
     // printf("test : %s\n", files_list[1].c_str());
     if (auto_play)
     {
