@@ -57,80 +57,106 @@ IPAddress subnet(255, 255, 255, 0);
 
 bool loop_file = true;                // Default loop audio files
 const bool REQUEST_STATIC_IP = false; // Demander l'attribution d'une ip statique
-const bool AUTO_PLAY_TRACK = true;    // Lit la premiere track au demarrage
+const bool AUTO_PLAY_TRACK = false;   // Lit la premiere track au demarrage
 const bool DEBUG = true;              // Afficher les messages dans la console
 std::vector<std::string> files_list;
 Audio audio;
 WiFiUDP udp;
 AsyncWebServer server(80);
 
+String getContentType(String filename)
+{
+    if (filename.endsWith(".htm") || filename.endsWith(".html"))
+        return "text/html";
+    else if (filename.endsWith(".css"))
+        return "text/css";
+    else if (filename.endsWith(".js"))
+        return "application/javascript";
+    else if (filename.endsWith(".png"))
+        return "image/png";
+    else if (filename.endsWith(".jpg") || filename.endsWith(".jpeg"))
+        return "image/jpeg";
+    else if (filename.endsWith(".gif"))
+        return "image/gif";
+    else if (filename.endsWith(".ico"))
+        return "image/x-icon";
+    else if (filename.endsWith(".xml"))
+        return "text/xml";
+    else if (filename.endsWith(".pdf"))
+        return "application/pdf";
+    else if (filename.endsWith(".zip"))
+        return "application/zip";
+    else if (filename.endsWith(".gz"))
+        return "application/x-gzip";
+
+    return "text/plain";
+}
+
+void handleRequest(AsyncWebServerRequest *request)
+{
+    String filePath = request->url(); // Obtenez l'URL demandée
+
+    // Vérifier si le fichier existe sur la carte SD
+    if (SD.exists(filePath))
+    {
+        // Ouvrir le fichier en lecture
+        File file = SD.open(filePath);
+
+        // Vérifier si le fichier a été ouvert avec succès
+        if (file)
+        {
+            // Envoyer l'en-tête de réponse avec le type MIME approprié
+            String contentType = getContentType(filePath);
+            request->send(file, contentType);
+
+            // Fermer le fichier
+            file.close();
+            return;
+        }
+    }
+
+    // Si le fichier n'existe pas ou s'il y a une erreur, renvoyer une réponse 404
+    request->send(404, "text/plain", "File not found on sd card");
+}
+File uploadFile;
 void handleFileUpload(AsyncWebServerRequest *request, String filename, size_t index, uint8_t *data, size_t len, bool final)
 {
-    static File uploadFile;
-
+    if (request->url() != "/edit")
+        return;
     // S'il s'agit du premier fragment du fichier, ouvrir le fichier en écriture
     if (index == 0)
     {
-        // uploadFile = SPIFFS.open("/" + filename, "w");
         if (SD.exists((char *)filename.c_str()))
             SD.remove((char *)filename.c_str());
         uploadFile = SD.open(filename.c_str(), FILE_WRITE);
         Serial.print("Upload: START, filename: ");
         Serial.println(filename);
+        // Serial.println(filename);
+        Serial.printf("Len : %d\n", len);
+    
     }
 
     // Écrire les données dans le fichier
     if (uploadFile)
     {
-        // uploadFile.write(data, len);
         if (uploadFile)
             uploadFile.write(data, len);
         Serial.print("Upload: WRITE, Bytes: ");
         Serial.println(len);
+
     }
 
     // S'il s'agit du dernier fragment du fichier, fermer le fichier
     if (final)
     {
-        // uploadFile.close();
         if (uploadFile)
             uploadFile.close();
-        Serial.print("Upload: END, Size: ");
-        // Serial.println(upload.totalSize);
-        Serial.println("undefined");
-        // Serial.printf("Fichier \"%s\" téléchargé avec succès\n", filename.c_str());
-        // Vous pouvez effectuer des actions supplémentaires ici, comme envoyer une réponse au client
+        Serial.print("Upload: END :");
+        Serial.println(len);
+        
+        request->send(200);
     }
 }
-
-// void handleFileUpload()
-// {
-//     if (server.uri() != "/edit")
-//         return;
-//     HTTPUpload &upload = server.upload();
-//     if (upload.status == UPLOAD_FILE_START)
-//     {
-//         if (SD.exists((char *)upload.filename.c_str()))
-//             SD.remove((char *)upload.filename.c_str());
-//         uploadFile = SD.open(upload.filename.c_str(), FILE_WRITE);
-//         DBG_OUTPUT_PORT.print("Upload: START, filename: ");
-//         DBG_OUTPUT_PORT.println(upload.filename);
-//     }
-//     else if (upload.status == UPLOAD_FILE_WRITE)
-//     {
-//         if (uploadFile)
-//             uploadFile.write(upload.buf, upload.currentSize);
-//         DBG_OUTPUT_PORT.print("Upload: WRITE, Bytes: ");
-//         DBG_OUTPUT_PORT.println(upload.currentSize);
-//     }
-//     else if (upload.status == UPLOAD_FILE_END)
-//     {
-//         if (uploadFile)
-//             uploadFile.close();
-//         DBG_OUTPUT_PORT.print("Upload: END, Size: ");
-//         DBG_OUTPUT_PORT.println(upload.totalSize);
-//     }
-// }
 
 std::vector<std::string> listSdFiles(const char *dirname)
 {
@@ -180,11 +206,11 @@ void setup()
     Serial.begin(115200);
     if (!SD.begin(SD_CS))
     {
-        Serial.println("initialization failed!");
+        Serial.println("SD initialization failed!");
         while (1)
             ;
     }
-    Serial.println("initialization done.");
+    Serial.println("SD initialization done.");
     if (!SPIFFS.begin())
     {
         Serial.println("SPIFFS initialization failed !");
@@ -213,12 +239,20 @@ void setup()
     }
     server.on("/", HTTP_ANY, [](AsyncWebServerRequest *request)
               { request->send(SPIFFS, "/index.html", String(), false); });
-    server.on("/edit", HTTP_POST, [](AsyncWebServerRequest *request){request->send(200);}, handleFileUpload);
+    // server.on(
+    //     "/edit", HTTP_POST, [](AsyncWebServerRequest *request)
+    //     { request->send(200); },
+    //     handleFileUpload);
+    server.onFileUpload(handleFileUpload);
+    // server.on("/edit", HTTP_POST, handleFileUpload2);
+
     server.serveStatic("/index.css", SPIFFS, "/index.css");
     server.serveStatic("/index.js", SPIFFS, "/index.js");
     // server.serveStatic("/background.png", SPIFFS, "/background.png");
     // server.serveStatic("/react.svg", SPIFFS, "/react.svg");
     server.serveStatic("/vite.svg", SPIFFS, "/vite.svg");
+    server.onNotFound(handleRequest);
+
     server.begin();
 
     audio.setPinout(I2S_BCLK, I2S_LRC, I2S_DOUT);
