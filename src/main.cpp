@@ -32,6 +32,7 @@
 #include "Arduino.h"
 #include "WiFi.h"
 #include "Audio.h"
+#include "WebServer.h"
 #include "SD.h"
 #include "FS.h"
 
@@ -48,19 +49,74 @@
 
 String ssid = "SFR_B4C8";                 // nom du routeur
 String password = "enorksenez3vesterish"; // mot de passe
+// String ssid = "TP-Link_F387";                 // nom du routeur
+// String password = "32678697"; // mot de passe
 
 IPAddress ip(192, 168, 0, 225);      // Local IP (static)
 IPAddress gateway(192, 168, 0, 1);   // Router IP
 const unsigned int localPort = 8266; // port de reception UDP
 IPAddress subnet(255, 255, 255, 0);
 
-bool loop_file = true;               // Default loop audio files
+bool loop_file = true;                // Default loop audio files
 const bool REQUEST_STATIC_IP = false; // Demander l'attribution d'une ip statique
 const bool AUTO_PLAY_TRACK = true;    // Lit la premiere track au demarrage
 const bool DEBUG = true;              // Afficher les messages dans la console
 std::vector<std::string> files_list;
 Audio audio;
 WiFiUDP udp;
+WebServer server(80);
+
+void handleRoot()
+{
+    File file = SPIFFS.open("/index.html", "r");
+    if (!file)
+    {
+        server.send(404, "text/plain", "File not found");
+        return;
+    }
+
+    server.streamFile(file, "text/html");
+    file.close();
+}
+
+void handleCSS()
+{
+    File file = SPIFFS.open("/index.css", "r");
+    if (!file)
+    {
+        server.send(404, "text/plain", "File not found");
+        return;
+    }
+
+    server.streamFile(file, "text/css");
+    file.close();
+}
+
+void handleJS()
+{
+    File file = SPIFFS.open("/index.js", "r");
+    if (!file)
+    {
+        server.send(404, "text/plain", "File not found");
+        return;
+    }
+
+    server.streamFile(file, "application/javascript");
+    file.close();
+}
+
+void handleIcon()
+{
+    File file = SPIFFS.open("/vite.svg", "r");
+    if (!file)
+    {
+        server.send(404, "text/plain", "Fichier SVG non trouvé");
+        return;
+    }
+
+    server.streamFile(file, "image/svg+xml");
+    file.close();
+}
 
 std::vector<std::string> listSdFiles(const char *dirname)
 {
@@ -110,11 +166,19 @@ void setup()
     Serial.begin(115200);
     if (!SD.begin(SD_CS))
     {
-        Serial.println("initialization failed!");
+        Serial.println("SD initialization failed !");
         while (1)
             ;
     }
-    Serial.println("initialization done.");
+    Serial.println("SD initialization done.");
+    if (!SPIFFS.begin())
+    {
+        Serial.println("SPIFFS initialization failed !");
+        while (1)
+            ;
+        // return;
+    }
+    Serial.println("SPIFFS initialization done.");
 
     WiFi.mode(WIFI_STA);
     if (REQUEST_STATIC_IP)
@@ -135,6 +199,12 @@ void setup()
         Serial.print("IP: ");
         Serial.println(WiFi.localIP());
     }
+
+    server.on("/", handleRoot);
+    server.on("/index.css", handleCSS);
+    server.on("/index.js", handleJS);
+    server.on("/vite.svg", handleIcon);
+    server.begin();
 
     audio.setPinout(I2S_BCLK, I2S_LRC, I2S_DOUT);
     files_list = listSdFiles("/");
@@ -188,6 +258,7 @@ void splitString(String message, char separator, String data[5])
 void loop()
 {
     audio.loop();
+    server.handleClient();
 
     int packetSize = udp.parsePacket();
     if (packetSize)

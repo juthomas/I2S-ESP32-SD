@@ -1,0 +1,27 @@
+.glitched-input {
+	padding: 10px 20px;
+	color: black;
+	outline: none;
+	background: #72dec2;
+	font-size: 16px;
+	border: none;
+	clip-path: polygon(0 0, 100% 0, 100% 100%, 3% 100%, 0 70%);
+	border-right: 4px solid #ffb545;
+	transition: 0.2s ease;
+}
+
+
+.glitched-input ::after {
+    left: -15px;
+    position: absolute;
+    background-color: red;
+    /* padding: 10px 20px;
+	color: black;
+	outline: none;
+	background: #72dec2;
+	font-size: 16px;
+	border: none;
+	clip-path: polygon(0 0, 100% 0, 100% 100%, 3% 100%, 0 70%);
+	border-right: 4px solid #ffb545;
+	transition: 0.2s ease; */
+}
