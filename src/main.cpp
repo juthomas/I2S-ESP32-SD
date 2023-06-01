@@ -31,6 +31,7 @@
 
 #include "Arduino.h"
 #include "WiFi.h"
+#include "ESPAsyncWebServer.h"
 #include "Audio.h"
 #include "SD.h"
 #include "FS.h"
@@ -54,13 +55,82 @@ IPAddress gateway(192, 168, 0, 1);   // Router IP
 const unsigned int localPort = 8266; // port de reception UDP
 IPAddress subnet(255, 255, 255, 0);
 
-bool loop_file = true;               // Default loop audio files
+bool loop_file = true;                // Default loop audio files
 const bool REQUEST_STATIC_IP = false; // Demander l'attribution d'une ip statique
 const bool AUTO_PLAY_TRACK = true;    // Lit la premiere track au demarrage
 const bool DEBUG = true;              // Afficher les messages dans la console
 std::vector<std::string> files_list;
 Audio audio;
 WiFiUDP udp;
+AsyncWebServer server(80);
+
+void handleFileUpload(AsyncWebServerRequest *request, String filename, size_t index, uint8_t *data, size_t len, bool final)
+{
+    static File uploadFile;
+
+    // S'il s'agit du premier fragment du fichier, ouvrir le fichier en écriture
+    if (index == 0)
+    {
+        // uploadFile = SPIFFS.open("/" + filename, "w");
+        if (SD.exists((char *)filename.c_str()))
+            SD.remove((char *)filename.c_str());
+        uploadFile = SD.open(filename.c_str(), FILE_WRITE);
+        Serial.print("Upload: START, filename: ");
+        Serial.println(filename);
+    }
+
+    // Écrire les données dans le fichier
+    if (uploadFile)
+    {
+        // uploadFile.write(data, len);
+        if (uploadFile)
+            uploadFile.write(data, len);
+        Serial.print("Upload: WRITE, Bytes: ");
+        Serial.println(len);
+    }
+
+    // S'il s'agit du dernier fragment du fichier, fermer le fichier
+    if (final)
+    {
+        // uploadFile.close();
+        if (uploadFile)
+            uploadFile.close();
+        Serial.print("Upload: END, Size: ");
+        // Serial.println(upload.totalSize);
+        Serial.println("undefined");
+        // Serial.printf("Fichier \"%s\" téléchargé avec succès\n", filename.c_str());
+        // Vous pouvez effectuer des actions supplémentaires ici, comme envoyer une réponse au client
+    }
+}
+
+// void handleFileUpload()
+// {
+//     if (server.uri() != "/edit")
+//         return;
+//     HTTPUpload &upload = server.upload();
+//     if (upload.status == UPLOAD_FILE_START)
+//     {
+//         if (SD.exists((char *)upload.filename.c_str()))
+//             SD.remove((char *)upload.filename.c_str());
+//         uploadFile = SD.open(upload.filename.c_str(), FILE_WRITE);
+//         DBG_OUTPUT_PORT.print("Upload: START, filename: ");
+//         DBG_OUTPUT_PORT.println(upload.filename);
+//     }
+//     else if (upload.status == UPLOAD_FILE_WRITE)
+//     {
+//         if (uploadFile)
+//             uploadFile.write(upload.buf, upload.currentSize);
+//         DBG_OUTPUT_PORT.print("Upload: WRITE, Bytes: ");
+//         DBG_OUTPUT_PORT.println(upload.currentSize);
+//     }
+//     else if (upload.status == UPLOAD_FILE_END)
+//     {
+//         if (uploadFile)
+//             uploadFile.close();
+//         DBG_OUTPUT_PORT.print("Upload: END, Size: ");
+//         DBG_OUTPUT_PORT.println(upload.totalSize);
+//     }
+// }
 
 std::vector<std::string> listSdFiles(const char *dirname)
 {
@@ -115,7 +185,14 @@ void setup()
             ;
     }
     Serial.println("initialization done.");
-
+    if (!SPIFFS.begin())
+    {
+        Serial.println("SPIFFS initialization failed !");
+        while (1)
+            ;
+        // return;
+    }
+    Serial.println("SPIFFS initialization done.");
     WiFi.mode(WIFI_STA);
     if (REQUEST_STATIC_IP)
     {
@@ -128,13 +205,21 @@ void setup()
         delay(500);
     }
     udp.begin(localPort);
-
     if (DEBUG)
     {
         Serial.begin(115200);
         Serial.print("IP: ");
         Serial.println(WiFi.localIP());
     }
+    server.on("/", HTTP_ANY, [](AsyncWebServerRequest *request)
+              { request->send(SPIFFS, "/index.html", String(), false); });
+    server.on("/edit", HTTP_POST, [](AsyncWebServerRequest *request){request->send(200);}, handleFileUpload);
+    server.serveStatic("/index.css", SPIFFS, "/index.css");
+    server.serveStatic("/index.js", SPIFFS, "/index.js");
+    // server.serveStatic("/background.png", SPIFFS, "/background.png");
+    // server.serveStatic("/react.svg", SPIFFS, "/react.svg");
+    server.serveStatic("/vite.svg", SPIFFS, "/vite.svg");
+    server.begin();
 
     audio.setPinout(I2S_BCLK, I2S_LRC, I2S_DOUT);
     files_list = listSdFiles("/");
