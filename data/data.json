@@ -1,0 +1,8 @@
+{
+  "loop_file": true,
+  "auto_play": false,
+  "note": "notes pour plus tard...",
+  "udp_port": 8266,
+  "volume": 60,
+  "track_assignation": [{ "path": "/music1.wav", "index": 1 }, { "path": "/music2.wav", "index": 2 }]
+}

@@ -31,10 +31,12 @@
 
 #include "Arduino.h"
 #include "WiFi.h"
+#include "jsonParser.h"
 #include "ESPAsyncWebServer.h"
 #include "Audio.h"
 #include "SD.h"
 #include "FS.h"
+#include "sstream"
 
 // branchement Carte SD
 #define SD_CS 5
@@ -50,15 +52,34 @@
 String ssid = "SFR_B4C8";                 // nom du routeur
 String password = "enorksenez3vesterish"; // mot de passe
 
-IPAddress ip(192, 168, 0, 225);      // Local IP (static)
-IPAddress gateway(192, 168, 0, 1);   // Router IP
-const unsigned int localPort = 8266; // port de reception UDP
+IPAddress ip(192, 168, 0, 225);    // Local IP (static)
+IPAddress gateway(192, 168, 0, 1); // Router IP
+unsigned int localPort = 8266;     // port de reception UDP
 IPAddress subnet(255, 255, 255, 0);
 
 bool loop_file = true;                // Default loop audio files
 const bool REQUEST_STATIC_IP = false; // Demander l'attribution d'une ip statique
-const bool AUTO_PLAY_TRACK = false;   // Lit la premiere track au demarrage
+bool auto_play = false;               // Lit la premiere track au demarrage
 const bool DEBUG = true;              // Afficher les messages dans la console
+namespace patch
+{
+    template <typename T>
+    std::string to_string(const T &n)
+    {
+        std::ostringstream stm;
+        stm << n;
+        return stm.str();
+    }
+}
+typedef struct s_music_data
+{
+    String path;
+    uint8_t index;
+} t_music_data;
+
+String note = "";
+uint8_t volume;
+std::vector<t_music_data> music_data;
 std::vector<std::string> files_list;
 Audio audio;
 WiFiUDP udp;
@@ -133,7 +154,6 @@ void handleFileUpload(AsyncWebServerRequest *request, String filename, size_t in
         Serial.println(filename);
         // Serial.println(filename);
         Serial.printf("Len : %d\n", len);
-    
     }
 
     // Écrire les données dans le fichier
@@ -143,7 +163,6 @@ void handleFileUpload(AsyncWebServerRequest *request, String filename, size_t in
             uploadFile.write(data, len);
         Serial.print("Upload: WRITE, Bytes: ");
         Serial.println(len);
-
     }
 
     // S'il s'agit du dernier fragment du fichier, fermer le fichier
@@ -153,8 +172,102 @@ void handleFileUpload(AsyncWebServerRequest *request, String filename, size_t in
             uploadFile.close();
         Serial.print("Upload: END :");
         Serial.println(len);
-        
+
         request->send(200);
+    }
+}
+
+String local_vars_to_json()
+{
+    StaticJsonDocument<2048> doc;
+
+    doc["loop_file"] = loop_file;
+    doc["auto_play"] = auto_play;
+    doc["note"] = note;
+    doc["udp_port"] = localPort;
+    doc["volume"] = volume;
+    for (std::vector<t_music_data>::size_type i = 0; i != music_data.size(); i++)
+    {
+        doc["track_assignation"][i]["path"] = music_data[i].path;
+        doc["track_assignation"][i]["index"] = music_data[i].index;
+    }
+    String buff;
+    serializeJsonPretty(doc, buff);
+    return (buff);
+}
+
+void update_spiffs()
+{
+    char *filePath = "/data.json";
+    fs::File file = SPIFFS.open(filePath, "w");
+    file.print(local_vars_to_json().c_str());
+    file.close();
+}
+
+void json_to_local_vars(uint8_t *data)
+{
+    StaticJsonDocument<2048> doc;
+
+    DeserializationError error = deserializeJson(doc, data);
+    if (error)
+    {
+        Serial.println(error.c_str());
+        return;
+    }
+
+    loop_file = doc["loop_file"].as<const bool>();
+    auto_play = doc["auto_play"].as<const bool>();
+    note = doc["note"].as<String>();
+    localPort = doc["udp_port"].as<unsigned int>();
+    volume = doc["volume"].as<unsigned char>();
+
+    music_data.clear();
+    for (uint16_t i = 0; i < doc["track_assignation"].size(); i++)
+    {
+        music_data.push_back((t_music_data){.path = doc["track_assignation"][i]["path"].as<String>(),
+                                            .index = doc["track_assignation"][i]["index"].as<unsigned char>()});
+    }
+}
+
+void load_spiffs()
+{
+    char *filePath = "/data.json";
+    fs::File file = SPIFFS.open(filePath, "r");
+    if (!file)
+    {
+        Serial.println("Failed to open file for reading");
+        return;
+    }
+    Serial.printf("File Size : %d\n", file.size());
+    Serial.printf("Free Heap : %d\n", ESP.getFreeHeap());
+    uint8_t *buff;
+    size_t read_index = 1;
+    size_t buff_size = file.size();
+    buff = (uint8_t *)malloc(sizeof(char) * (buff_size + 1));
+    if ((read_index = file.read(buff, (buff_size))) > 0)
+    {
+        buff[read_index] = '\0';
+        Serial.printf("[SPIFFS]\n%s", buff);
+    }
+    else
+    {
+        Serial.printf("Error reading SPIFFS");
+    }
+
+    json_to_local_vars(buff);
+
+    free(buff);
+    file.close();
+
+    Serial.printf("SPIFFS loop_file : %s\n", loop_file ? "true" : "false");
+    Serial.printf("SPIFFS auto_play : %s\n", auto_play ? "true" : "false");
+    Serial.printf("SPIFFS note : %s\n", note.c_str());
+    Serial.printf("SPIFFS udp_port : %d\n", localPort);
+    Serial.printf("SPIFFS volume : %d\n", volume);
+
+    for (std::vector<t_music_data>::size_type i = 0; i != music_data.size(); i++)
+    {
+        Serial.printf("SPIFFS track_assignation (path:'%s' index:%d)\n", music_data[i].path.c_str(), music_data[i].index);
     }
 }
 
@@ -219,6 +332,9 @@ void setup()
         // return;
     }
     Serial.println("SPIFFS initialization done.");
+
+    load_spiffs();
+    Serial.printf("JSON : %s/n", local_vars_to_json().c_str());
     WiFi.mode(WIFI_STA);
     if (REQUEST_STATIC_IP)
     {
@@ -259,7 +375,7 @@ void setup()
     files_list = listSdFiles("/");
 
     // printf("test : %s\n", files_list[1].c_str());
-    if (AUTO_PLAY_TRACK)
+    if (auto_play)
     {
         audio.connecttoFS(SD, files_list[0].c_str());
     }
