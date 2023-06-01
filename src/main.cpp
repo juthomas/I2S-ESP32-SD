@@ -359,6 +359,8 @@ void setup()
     //     "/edit", HTTP_POST, [](AsyncWebServerRequest *request)
     //     { request->send(200); },
     //     handleFileUpload);
+    server.on("/data", HTTP_GET, [](AsyncWebServerRequest *request)
+              {Serial.printf("Json demandé par le site\n");request->send(200, "application/json", local_vars_to_json()); });
     server.onFileUpload(handleFileUpload);
     // server.on("/edit", HTTP_POST, handleFileUpload2);
 

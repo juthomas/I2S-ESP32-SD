@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   FileButton,
   Button,
@@ -38,9 +38,24 @@ function formatFileSize(file: File): string {
   }
 }
 
+interface TrackAssignation {
+  path: string;
+  index: number;
+}
+
+interface Data {
+  loop_file: boolean;
+  auto_play: boolean;
+  note: string;
+  udp_port: number;
+  volume: number;
+  track_assignation: TrackAssignation[];
+}
+
 function App() {
   const theme = useMantineTheme();
   const [files, setFiles] = useState<File[]>([]);
+  const [data, setData] = useState<Data>();
   const [uploadProgress, setUploadProgress] = useState(0);
   const [uploadState, setUploadState] = useState<
     "failed" | "uploading" | "done"
@@ -48,6 +63,44 @@ function App() {
   const uploadColors = { failed: "red", uploading: "blue", done: "green" };
   const openRef = useRef<() => void>(null);
 
+  console.log("Host :", window.location.hostname);
+
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        const response = await fetch("/data");
+        console.log("Response :", response);
+        if (response.ok) {
+          setData({
+            loop_file: true,
+            auto_play: false,
+            note: "notes pour plus tard...",
+            udp_port: 8266,
+            volume: 60,
+            track_assignation: [
+              {
+                path: "/osc.wav",
+                index: 1,
+              },
+              {
+                path: "/music2.wav",
+                index: 2,
+              },
+            ],
+          });
+          // const data: Data = await response.json();
+          // setData(data);
+          console.log("Fetched data :", data);
+        } else {
+          console.error("Failed to fetch sensor data");
+        }
+      } catch (error) {
+        console.error("Error fetching sensor data", error);
+      }
+    };
+
+    fetchData();
+  }, []);
   // function httpPostProcessRequest() {
 
   // if (xmlHttp.readyState == 4) {
@@ -55,6 +108,21 @@ function App() {
   //     alert("ERROR[" + xmlHttp.status + "]: " + xmlHttp.responseText);
   // }
   // }
+
+  const handleLinkDownload = (link: string) => {
+    // Créez une URL pour le fichier
+    // const fileUrl = URL.createObjectURL(file);
+    // Créez un lien de téléchargement
+    const downloadLink = document.createElement("a");
+    downloadLink.href = link;
+    downloadLink.download = link;
+    // Ajoutez le lien de téléchargement au document
+    document.body.appendChild(downloadLink);
+    // Cliquez sur le lien pour déclencher le téléchargement
+    downloadLink.click();
+    // Supprimez le lien du document
+    document.body.removeChild(downloadLink);
+  };
 
   const handleFileDownload = (file: File) => {
     // Créez une URL pour le fichier
@@ -227,21 +295,21 @@ function App() {
         <thead>
           <tr>
             <th>Fichier</th>
-            <th>Taille</th>
             <th>Type</th>
+            <th>Index</th>
             <th>Télecharger sur l'ordinateur</th>
             <th>Lire sur l'ESP</th>
           </tr>
         </thead>
         <tbody>
-          {files.map((file, index) => (
+          {data?.track_assignation.map((element, index) => (
             <tr key={index}>
-              <td>{file.name}</td>
-              <td>{formatFileSize(file)}</td>
+              <td>{element.path.substring(1)}</td>
               <td>audio?</td>
+              <td>{element.index}</td>
               <td>
                 <Badge
-                  onClick={() => handleFileDownload(file)}
+                  onClick={() => handleLinkDownload(element.path)}
                   style={{ cursor: "pointer" }}
                 >
                   Télecharger
@@ -249,13 +317,13 @@ function App() {
               </td>
               <td>
                 <Badge
-                  onClick={() => handleFileDownload(file)}
+                  // onClick={() => handleFileDownload(file)}
                   style={{ cursor: "pointer" }}
                 >
                   Lire
                 </Badge>
                 <Badge
-                  onClick={() => handleFileDownload(file)}
+                  // onClick={() => handleFileDownload(file)}
                   style={{ cursor: "pointer" }}
                 >
                   Pause
