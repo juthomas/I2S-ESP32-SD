@@ -33,6 +33,7 @@ import { notifications } from "@mantine/notifications";
 import axios from "axios";
 import { useDisclosure } from "@mantine/hooks";
 import { useForm } from "@mantine/form";
+import { Settings } from "./components/Settings";
 
 function formatFileSize(file: File): string {
   const fileSize = file.size;
@@ -59,7 +60,7 @@ interface TrackAssignation {
   index: number;
 }
 
-interface Data {
+export interface Data {
   loop_file: boolean;
   auto_play: boolean;
   note: string;
@@ -72,7 +73,6 @@ function App() {
   const theme = useMantineTheme();
   const [files, setFiles] = useState<File[]>([]);
   const [data, setData] = useState<Data>();
-  const [opened, { open, close }] = useDisclosure(false);
 
   const [uploadProgress, setUploadProgress] = useState(0);
   const [uploadState, setUploadState] = useState<
@@ -80,15 +80,6 @@ function App() {
   >("uploading");
   const uploadColors = { failed: "red", uploading: "blue", done: "green" };
   const openRef = useRef<() => void>(null);
-  const form = useForm({
-    initialValues: {
-      loop_file: data?.loop_file,
-      auto_play: data?.auto_play,
-      note: data?.note,
-      udp_port: data?.udp_port,
-      volume: data?.volume,
-    },
-  });
   console.log("Host :", window.location.hostname);
 
   const fetchData = async () => {
@@ -116,13 +107,7 @@ function App() {
         const data: Data = await response.json();
         setData(data);
         console.log("Fetched data :", data);
-        form.setValues({
-          loop_file: data?.loop_file,
-          auto_play: data?.auto_play,
-          note: data?.note,
-          udp_port: data?.udp_port,
-          volume: data?.volume,
-        });
+
       } else {
         console.error("Failed to fetch sensor data");
       }
@@ -225,57 +210,9 @@ function App() {
 
   return (
     <Paper shadow="sm" p="md" m="lg">
-      <Modal opened={opened} onClose={close} title="Parametres" centered>
-        <form
-          onSubmit={form.onSubmit(() => {
-            console.log("Form Values", form.values);
-            const message = JSON.stringify(form.values);
-            axios.post("/settings", form.values).then(() => fetchData());
-            // window.electron.ipcRenderer.send('set-settings', message)
-          })}
-        >
-          <Switch
-            labelPosition="left"
-            label="Loop audio"
-            {...form.getInputProps("loop_file", { type: "checkbox" })}
-          />
-          <Switch
-            mt="md"
-            labelPosition="left"
-            label="Lecture auto"
-            {...form.getInputProps("auto_play", { type: "checkbox" })}
-          />
-          <TextInput
-            mt="md"
-            label="Notes"
-            placeholder="Notes..."
-            {...form.getInputProps("note")}
-          />
-          <NumberInput
-            mt="md"
-            label="Port Udp"
-            max={99999}
-            min={0}
-            {...form.getInputProps("udp_port")}
-          />
-          <NumberInput
-            mt="md"
-            label="Volume"
-            max={255}
-            min={0}
-            {...form.getInputProps("volume")}
-          />
-          <Flex justify={"space-between"} mt="md">
-            <Button type="submit">Save</Button>
-            {/* <ActionIcon onClick={updateValues} variant="filled" size="2.2rem">
-              <IconRefresh size="1.5rem" />
-            </ActionIcon> */}
-          </Flex>
-        </form>
-      </Modal>
-      <ActionIcon onClick={open} variant="filled" color="gray" size={"xl"}>
-        <IconSettings size={"xl"} />
-      </ActionIcon>
+
+      <Settings data={data} fetchData={fetchData}/>
+
       <Title order={3}>Note :</Title>
       <Text>{data?.note}</Text>
       <Dropzone
@@ -378,6 +315,7 @@ function App() {
         label={uploadProgress.toFixed(2) + "%"}
         color={uploadColors[uploadState]}
       />
+      
       <Box sx={{ display: "flex", justifyContent: "space-between" }}>
         <Title order={4}>Fichiers présents sur la carte SD</Title>
         <ActionIcon variant="filled" color="blue" onClick={() => fetchData()}>
