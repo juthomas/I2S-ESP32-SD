@@ -276,6 +276,8 @@ function App() {
       <ActionIcon onClick={open} variant="filled" color="gray" size={"xl"}>
         <IconSettings size={"xl"} />
       </ActionIcon>
+      <Title order={3}>Note :</Title>
+      <Text>{data?.note}</Text>
       <Dropzone
         h={200}
         multiple={false}

@@ -246,6 +246,10 @@ std::vector<String> listSdFiles(const char *dirname)
 
     // Fermer le répertoire
     root.close();
+
+    // Trier la liste des fichiers dans l'ordre alphabétique
+    std::sort(fileList.begin(), fileList.end());
+
     return fileList;
 }
 
@@ -278,6 +282,8 @@ void handleSettings(AsyncWebServerRequest *request, uint8_t *data, size_t len, s
     Serial.printf("Handle settings : %s\n", data);
     json_to_local_vars(data);
     update_spiffs();
+    audio.setFileLoop(loop_file);
+    audio.setVolume(volume);
     // StaticJsonDocument<2048> doc;
 
     // DeserializationError error = deserializeJson(doc, data);
@@ -459,13 +465,17 @@ void setup()
     audio.setPinout(I2S_BCLK, I2S_LRC, I2S_DOUT);
     update_music_from_sd();
     // printf("test : %s\n", files_list[1].c_str());
+    if (loop_file)
+    {
+        audio.setFileLoop(true);
+    }
     if (auto_play)
     {
         audio.connecttoFS(SD, files_list[0].c_str());
     }
 
     audio.setVolumeSteps(255); // max 255
-    audio.setVolume(63);
+    audio.setVolume(volume);
 }
 
 bool need_to_play = true;
