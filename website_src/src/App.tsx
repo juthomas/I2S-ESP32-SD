@@ -212,7 +212,7 @@ function App() {
     };
 
     xmlHttp.upload.onprogress = (event) => {
-      const progress = Math.round((event.loaded / event.total) * 100);
+      const progress = ((event.loaded / event.total) * 100);
       console.log(`Progression : ${progress}%`);
       setUploadProgress(progress);
     };
@@ -375,7 +375,7 @@ function App() {
         radius={"xl"}
         size={24}
         value={uploadProgress}
-        label={uploadProgress + "%"}
+        label={uploadProgress.toFixed(2) + "%"}
         color={uploadColors[uploadState]}
       />
       <Box sx={{ display: "flex", justifyContent: "space-between" }}>
