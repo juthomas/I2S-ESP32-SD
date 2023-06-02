@@ -113,8 +113,6 @@ String getContentType(String filename)
     return "text/plain";
 }
 
-
-
 String local_vars_to_json()
 {
     StaticJsonDocument<2048> doc;
@@ -312,7 +310,10 @@ void handlePlay(AsyncWebServerRequest *request, uint8_t *data, size_t len, size_
     int file_index = doc["index"].as<unsigned int>();
     Serial.printf("Playing file %d\n", file_index);
     audio.connecttoFS(SD, files_list[file_index].c_str());
-
+    if (loop_file)
+    {
+        audio.setFileLoop(true);
+    }
     request->send(200);
 }
 void handleRequest(AsyncWebServerRequest *request)
@@ -465,13 +466,13 @@ void setup()
     audio.setPinout(I2S_BCLK, I2S_LRC, I2S_DOUT);
     update_music_from_sd();
     // printf("test : %s\n", files_list[1].c_str());
-    if (loop_file)
-    {
-        audio.setFileLoop(true);
-    }
     if (auto_play)
     {
         audio.connecttoFS(SD, files_list[0].c_str());
+    }
+    if (loop_file)
+    {
+        audio.setFileLoop(true);
     }
 
     audio.setVolumeSteps(255); // max 255
