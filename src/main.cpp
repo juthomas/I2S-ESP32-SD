@@ -151,17 +151,38 @@ void json_to_local_vars(uint8_t *data)
         return;
     }
 
-    loop_file = doc["loop_file"].as<const bool>();
-    auto_play = doc["auto_play"].as<const bool>();
-    note = doc["note"].as<String>();
-    localPort = doc["udp_port"].as<unsigned int>();
-    volume = doc["volume"].as<unsigned char>();
-
-    music_data.clear();
-    for (uint16_t i = 0; i < doc["track_assignation"].size(); i++)
+    if (doc.containsKey("loop_file"))
     {
-        music_data.push_back((t_music_data){.path = doc["track_assignation"][i]["path"].as<String>(),
-                                            .index = doc["track_assignation"][i]["index"].as<unsigned char>()});
+        bool tmp_loop_file = doc["loop_file"].as<const bool>();
+        if (tmp_loop_file != loop_file)
+        {
+            loop_file = tmp_loop_file;
+            audio.setFileLoop(loop_file);
+        }
+    }
+    if (doc.containsKey("auto_play"))
+        auto_play = doc["auto_play"].as<const bool>();
+    if (doc.containsKey("note"))
+        note = doc["note"].as<String>();
+    if (doc.containsKey("udp_port"))
+        localPort = doc["udp_port"].as<unsigned int>();
+    if (doc.containsKey("volume"))
+    {
+        uint8_t tmp_volume = doc["volume"].as<unsigned char>();
+        if (tmp_volume != volume)
+        {
+            volume = tmp_volume;
+            audio.setVolume(volume);
+        }
+    }
+    if (doc.containsKey("track_assignation"))
+    {
+        music_data.clear();
+        for (uint16_t i = 0; i < doc["track_assignation"].size(); i++)
+        {
+            music_data.push_back((t_music_data){.path = doc["track_assignation"][i]["path"].as<String>(),
+                                                .index = doc["track_assignation"][i]["index"].as<unsigned char>()});
+        }
     }
 }
 
@@ -251,6 +272,17 @@ std::vector<String> listSdFiles(const char *dirname)
     return fileList;
 }
 
+void update_music_from_sd()
+{
+    files_list = listSdFiles("/");
+    music_data.clear();
+    for (std::vector<String>::size_type i = 0; i != files_list.size(); i++)
+    {
+        music_data.push_back((t_music_data){.path = files_list[i],
+                                            .index = i});
+    }
+}
+
 void handleDelete(AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total)
 {
     audio.stopSong();
@@ -266,6 +298,7 @@ void handleDelete(AsyncWebServerRequest *request, uint8_t *data, size_t len, siz
     int file_index = doc["index"].as<unsigned int>();
     Serial.printf("Removing file %d\n", file_index);
     SD.remove(files_list[file_index].c_str());
+    update_music_from_sd();
     request->send(200);
 }
 
@@ -280,10 +313,9 @@ void handleSettings(AsyncWebServerRequest *request, uint8_t *data, size_t len, s
     Serial.printf("Handle settings : %s\n", data);
     json_to_local_vars(data);
     update_spiffs();
-    audio.setFileLoop(loop_file);
-    audio.setVolume(volume);
-    // StaticJsonDocument<2048> doc;
 
+    // StaticJsonDocument<2048> doc;
+    printf("Json to send : %s\n", local_vars_to_json().c_str());
     // DeserializationError error = deserializeJson(doc, data);
     // if (error)
     // {
@@ -375,19 +407,8 @@ void handleFileUpload(AsyncWebServerRequest *request, String filename, size_t in
             uploadFile.close();
         Serial.print("Upload: END :");
         Serial.println(len);
-
+        update_music_from_sd();
         request->send(200);
-    }
-}
-
-void update_music_from_sd()
-{
-    files_list = listSdFiles("/");
-    music_data.clear();
-    for (std::vector<String>::size_type i = 0; i != files_list.size(); i++)
-    {
-        music_data.push_back((t_music_data){.path = files_list[i],
-                                            .index = i});
     }
 }
 
@@ -441,7 +462,6 @@ void setup()
     //     handleFileUpload);
     server.on("/data", HTTP_GET, [](AsyncWebServerRequest *request)
               {Serial.printf("Json demandé par le site\n");
-              update_music_from_sd();
               request->send(200, "application/json", local_vars_to_json()); });
     server.on(
         "/play", HTTP_POST, [](AsyncWebServerRequest *request) {}, NULL, handlePlay);
