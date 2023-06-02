@@ -443,10 +443,13 @@ void setup()
     }
     WiFi.begin(ssid.c_str(), password.c_str());
 
+    Serial.print("Connecting ");
     while (WiFi.status() != WL_CONNECTED)
     {
+        Serial.print("...");
         delay(500);
     }
+    Serial.println("Connected");
     udp.begin(localPort);
     if (DEBUG)
     {
