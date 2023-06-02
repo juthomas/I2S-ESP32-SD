@@ -113,69 +113,7 @@ String getContentType(String filename)
     return "text/plain";
 }
 
-void handleRequest(AsyncWebServerRequest *request)
-{
-    String filePath = request->url(); // Obtenez l'URL demandée
 
-    // Vérifier si le fichier existe sur la carte SD
-    if (SD.exists(filePath))
-    {
-        // Ouvrir le fichier en lecture
-        File file = SD.open(filePath);
-
-        // Vérifier si le fichier a été ouvert avec succès
-        if (file)
-        {
-            // Envoyer l'en-tête de réponse avec le type MIME approprié
-            String contentType = getContentType(filePath);
-            request->send(file, contentType);
-
-            // Fermer le fichier
-            file.close();
-            return;
-        }
-    }
-
-    // Si le fichier n'existe pas ou s'il y a une erreur, renvoyer une réponse 404
-    request->send(404, "text/plain", "File not found on sd card");
-}
-File uploadFile;
-void handleFileUpload(AsyncWebServerRequest *request, String filename, size_t index, uint8_t *data, size_t len, bool final)
-{
-    if (request->url() != "/edit")
-        return;
-    // S'il s'agit du premier fragment du fichier, ouvrir le fichier en écriture
-    if (index == 0)
-    {
-        if (SD.exists((char *)filename.c_str()))
-            SD.remove((char *)filename.c_str());
-        uploadFile = SD.open(filename.c_str(), FILE_WRITE);
-        Serial.print("Upload: START, filename: ");
-        Serial.println(filename);
-        // Serial.println(filename);
-        Serial.printf("Len : %d\n", len);
-    }
-
-    // Écrire les données dans le fichier
-    if (uploadFile)
-    {
-        if (uploadFile)
-            uploadFile.write(data, len);
-        Serial.print("Upload: WRITE, Bytes: ");
-        Serial.println(len);
-    }
-
-    // S'il s'agit du dernier fragment du fichier, fermer le fichier
-    if (final)
-    {
-        if (uploadFile)
-            uploadFile.close();
-        Serial.print("Upload: END :");
-        Serial.println(len);
-
-        request->send(200);
-    }
-}
 
 String local_vars_to_json()
 {
@@ -311,6 +249,141 @@ std::vector<String> listSdFiles(const char *dirname)
     return fileList;
 }
 
+void handleDelete(AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total)
+{
+    audio.stopSong();
+
+    StaticJsonDocument<2048> doc;
+
+    DeserializationError error = deserializeJson(doc, data);
+    if (error)
+    {
+        Serial.println(error.c_str());
+        return;
+    }
+    int file_index = doc["index"].as<unsigned int>();
+    Serial.printf("Removing file %d\n", file_index);
+    SD.remove(files_list[file_index].c_str());
+    request->send(200);
+}
+
+void handleStop(AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total)
+{
+    audio.stopSong();
+    request->send(200);
+}
+
+void handleSettings(AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total)
+{
+    Serial.printf("Handle settings : %s\n", data);
+    json_to_local_vars(data);
+    update_spiffs();
+    // StaticJsonDocument<2048> doc;
+
+    // DeserializationError error = deserializeJson(doc, data);
+    // if (error)
+    // {
+    //     Serial.println(error.c_str());
+    //     return;
+    // }
+    // int file_index = doc["index"].as<unsigned int>();
+    // Serial.printf("Playing file %d\n", file_index);
+    // audio.connecttoFS(SD, files_list[file_index].c_str());
+
+    request->send(200);
+}
+
+void handlePlay(AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total)
+{
+    StaticJsonDocument<2048> doc;
+
+    DeserializationError error = deserializeJson(doc, data);
+    if (error)
+    {
+        Serial.println(error.c_str());
+        return;
+    }
+    int file_index = doc["index"].as<unsigned int>();
+    Serial.printf("Playing file %d\n", file_index);
+    audio.connecttoFS(SD, files_list[file_index].c_str());
+
+    request->send(200);
+}
+void handleRequest(AsyncWebServerRequest *request)
+{
+    String filePath = request->url(); // Obtenez l'URL demandée
+
+    // Vérifier si le fichier existe sur la carte SD
+    if (SD.exists(filePath))
+    {
+        // Ouvrir le fichier en lecture
+        File file = SD.open(filePath);
+
+        // Vérifier si le fichier a été ouvert avec succès
+        if (file)
+        {
+            // Envoyer l'en-tête de réponse avec le type MIME approprié
+            String contentType = getContentType(filePath);
+            request->send(file, contentType);
+
+            // Fermer le fichier
+            file.close();
+            return;
+        }
+    }
+
+    // Si le fichier n'existe pas ou s'il y a une erreur, renvoyer une réponse 404
+    request->send(404, "text/plain", "File not found on sd card");
+}
+File uploadFile;
+void handleFileUpload(AsyncWebServerRequest *request, String filename, size_t index, uint8_t *data, size_t len, bool final)
+{
+    if (request->url() != "/edit")
+        return;
+    // S'il s'agit du premier fragment du fichier, ouvrir le fichier en écriture
+    if (index == 0)
+    {
+        if (SD.exists((char *)filename.c_str()))
+            SD.remove((char *)filename.c_str());
+        uploadFile = SD.open(filename.c_str(), FILE_WRITE);
+        Serial.print("Upload: START, filename: ");
+        Serial.println(filename);
+        // Serial.println(filename);
+        Serial.printf("Len : %d\n", len);
+    }
+
+    // Écrire les données dans le fichier
+    if (uploadFile)
+    {
+        if (uploadFile)
+            uploadFile.write(data, len);
+        Serial.print("Upload: WRITE, Bytes: ");
+        Serial.println(len);
+    }
+
+    // S'il s'agit du dernier fragment du fichier, fermer le fichier
+    if (final)
+    {
+        if (uploadFile)
+            uploadFile.close();
+        Serial.print("Upload: END :");
+        Serial.println(len);
+
+        request->send(200);
+    }
+}
+
+void update_music_from_sd()
+{
+    files_list = listSdFiles("/");
+    music_data.clear();
+    for (std::vector<String>::size_type i = 0; i != files_list.size(); i++)
+    {
+        music_data.push_back((t_music_data){.path = files_list[i],
+                                            .index = i});
+    }
+}
+
 void setup()
 {
     pinMode(SD_CS, OUTPUT);
@@ -360,29 +433,17 @@ void setup()
     //     { request->send(200); },
     //     handleFileUpload);
     server.on("/data", HTTP_GET, [](AsyncWebServerRequest *request)
-              {Serial.printf("Json demandé par le site\n");request->send(200, "application/json", local_vars_to_json()); });
-    server.on("/play", HTTP_POST, [](AsyncWebServerRequest *request)
-              {
-                  int params = request->params();
-                  Serial.printf("params nu :%d\n", params);
-                  for (int i = 0; i < params; i++)
-                  {
-                      AsyncWebParameter *p = request->getParam(i);
-                      if (p->isFile())
-                      { // p->isPost() is also true
-                          Serial.printf("FILE[%s]: %s, size: %u\n", p->name().c_str(), p->value().c_str(), p->size());
-                      }
-                      else if (p->isPost())
-                      {
-                          Serial.printf("POST[%s]: %s\n", p->name().c_str(), p->value().c_str());
-                      }
-                      else
-                      {
-                          Serial.printf("GET[%s]: %s\n", p->name().c_str(), p->value().c_str());
-                      }
-                  }
-              });
-
+              {Serial.printf("Json demandé par le site\n");
+              update_music_from_sd();
+              request->send(200, "application/json", local_vars_to_json()); });
+    server.on(
+        "/play", HTTP_POST, [](AsyncWebServerRequest *request) {}, NULL, handlePlay);
+    server.on(
+        "/stop", HTTP_POST, [](AsyncWebServerRequest *request) {}, NULL, handleStop);
+    server.on(
+        "/delete", HTTP_POST, [](AsyncWebServerRequest *request) {}, NULL, handleDelete);
+    server.on(
+        "/settings", HTTP_POST, [](AsyncWebServerRequest *request) {}, NULL, handleSettings);
     server.onFileUpload(handleFileUpload);
     // server.on("/edit", HTTP_POST, handleFileUpload2);
 
@@ -396,14 +457,7 @@ void setup()
     server.begin();
 
     audio.setPinout(I2S_BCLK, I2S_LRC, I2S_DOUT);
-    files_list = listSdFiles("/");
-    music_data.clear();
-
-    for (std::vector<String>::size_type i = 0; i != files_list.size(); i++)
-    {
-        music_data.push_back((t_music_data){.path = files_list[i],
-                                            .index = i});
-    }
+    update_music_from_sd();
     // printf("test : %s\n", files_list[1].c_str());
     if (auto_play)
     {

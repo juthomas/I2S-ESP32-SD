@@ -13,10 +13,26 @@ import {
   Badge,
   Notification,
   Title,
+  ActionIcon,
+  Modal,
+  Flex,
+  TextInput,
+  Switch,
+  NumberInput,
 } from "@mantine/core";
 import { Dropzone, IMAGE_MIME_TYPE } from "@mantine/dropzone";
-import { IconUpload, IconPhoto, IconX, IconCheck } from "@tabler/icons-react";
+import {
+  IconUpload,
+  IconPhoto,
+  IconX,
+  IconCheck,
+  IconRefresh,
+  IconSettings,
+} from "@tabler/icons-react";
 import { notifications } from "@mantine/notifications";
+import axios from "axios";
+import { useDisclosure } from "@mantine/hooks";
+import { useForm } from "@mantine/form";
 
 function formatFileSize(file: File): string {
   const fileSize = file.size;
@@ -56,49 +72,66 @@ function App() {
   const theme = useMantineTheme();
   const [files, setFiles] = useState<File[]>([]);
   const [data, setData] = useState<Data>();
+  const [opened, { open, close }] = useDisclosure(false);
+
   const [uploadProgress, setUploadProgress] = useState(0);
   const [uploadState, setUploadState] = useState<
     "failed" | "uploading" | "done"
   >("uploading");
   const uploadColors = { failed: "red", uploading: "blue", done: "green" };
   const openRef = useRef<() => void>(null);
-
+  const form = useForm({
+    initialValues: {
+      loop_file: data?.loop_file,
+      auto_play: data?.auto_play,
+      note: data?.note,
+      udp_port: data?.udp_port,
+      volume: data?.volume,
+    },
+  });
   console.log("Host :", window.location.hostname);
 
-  useEffect(() => {
-    const fetchData = async () => {
-      try {
-        const response = await fetch("/data");
-        console.log("Response :", response);
-        if (response.ok) {
-          // setData({
-          //   loop_file: true,
-          //   auto_play: false,
-          //   note: "notes pour plus tard...",
-          //   udp_port: 8266,
-          //   volume: 60,
-          //   track_assignation: [
-          //     {
-          //       path: "/osc.wav",
-          //       index: 1,
-          //     },
-          //     {
-          //       path: "/music2.wav",
-          //       index: 2,
-          //     },
-          //   ],
-          // });
-          const data: Data = await response.json();
-          setData(data);
-          console.log("Fetched data :", data);
-        } else {
-          console.error("Failed to fetch sensor data");
-        }
-      } catch (error) {
-        console.error("Error fetching sensor data", error);
+  const fetchData = async () => {
+    try {
+      const response = await fetch("/data");
+      console.log("Response :", response);
+      if (response.ok) {
+        // setData({
+        //   loop_file: true,
+        //   auto_play: false,
+        //   note: "notes pour plus tard...",
+        //   udp_port: 8266,
+        //   volume: 60,
+        //   track_assignation: [
+        //     {
+        //       path: "/osc.wav",
+        //       index: 1,
+        //     },
+        //     {
+        //       path: "/music2.wav",
+        //       index: 2,
+        //     },
+        //   ],
+        // });
+        const data: Data = await response.json();
+        setData(data);
+        console.log("Fetched data :", data);
+        form.setValues({
+          loop_file: data?.loop_file,
+          auto_play: data?.auto_play,
+          note: data?.note,
+          udp_port: data?.udp_port,
+          volume: data?.volume,
+        });
+      } else {
+        console.error("Failed to fetch sensor data");
       }
-    };
+    } catch (error) {
+      console.error("Error fetching sensor data", error);
+    }
+  };
 
+  useEffect(() => {
     fetchData();
   }, []);
   // function httpPostProcessRequest() {
@@ -162,6 +195,7 @@ function App() {
             message: "",
           });
           setFiles([]);
+          fetchData();
         } else {
           console.log("Erreur lors de l'upload du fichier.");
           setUploadState("failed");
@@ -188,8 +222,60 @@ function App() {
     xmlHttp.open("POST", "/edit");
     xmlHttp.send(formData);
   };
+
   return (
     <Paper shadow="sm" p="md" m="lg">
+      <Modal opened={opened} onClose={close} title="Parametres" centered>
+        <form
+          onSubmit={form.onSubmit(() => {
+            console.log("Form Values", form.values);
+            const message = JSON.stringify(form.values);
+            axios.post("/settings", form.values).then(() => fetchData());
+            // window.electron.ipcRenderer.send('set-settings', message)
+          })}
+        >
+          <Switch
+            labelPosition="left"
+            label="Loop audio"
+            {...form.getInputProps("loop_file", { type: "checkbox" })}
+          />
+          <Switch
+            mt="md"
+            labelPosition="left"
+            label="Lecture auto"
+            {...form.getInputProps("auto_play", { type: "checkbox" })}
+          />
+          <TextInput
+            mt="md"
+            label="Notes"
+            placeholder="Notes..."
+            {...form.getInputProps("note")}
+          />
+          <NumberInput
+            mt="md"
+            label="Port Udp"
+            max={99999}
+            min={0}
+            {...form.getInputProps("udp_port")}
+          />
+          <NumberInput
+            mt="md"
+            label="Volume"
+            max={255}
+            min={0}
+            {...form.getInputProps("volume")}
+          />
+          <Flex justify={"space-between"} mt="md">
+            <Button type="submit">Save</Button>
+            {/* <ActionIcon onClick={updateValues} variant="filled" size="2.2rem">
+              <IconRefresh size="1.5rem" />
+            </ActionIcon> */}
+          </Flex>
+        </form>
+      </Modal>
+      <ActionIcon onClick={open} variant="filled" color="gray" size={"xl"}>
+        <IconSettings size={"xl"} />
+      </ActionIcon>
       <Dropzone
         h={200}
         multiple={false}
@@ -290,22 +376,27 @@ function App() {
         label={uploadProgress + "%"}
         color={uploadColors[uploadState]}
       />
-      <Title order={4}>Fichiers présents sur la carte SD</Title>
+      <Box sx={{ display: "flex", justifyContent: "space-between" }}>
+        <Title order={4}>Fichiers présents sur la carte SD</Title>
+        <ActionIcon variant="filled" color="blue" onClick={() => fetchData()}>
+          <IconRefresh />
+        </ActionIcon>
+      </Box>
+
       <Table>
         <thead>
           <tr>
             <th>Fichier</th>
-            <th>Type</th>
             <th>Index</th>
             <th>Télecharger sur l'ordinateur</th>
             <th>Lire sur l'ESP</th>
+            <th>Supprimer</th>
           </tr>
         </thead>
         <tbody>
           {data?.track_assignation.map((element, index) => (
             <tr key={index}>
               <td>{element.path.substring(1)}</td>
-              <td>audio?</td>
               <td>{element.index}</td>
               <td>
                 <Badge
@@ -317,24 +408,27 @@ function App() {
               </td>
               <td>
                 <Badge
-                  onClick={() => {
-                    fetch("/play", {
-                      method: "POST",
-                      body: JSON.stringify({ index }), // Remplacez '0' par l'index du fichier souhaité
-                      headers: {
-                        "Content-Type": "application/json",
-                      },
-                    });
-                  }}
+                  onClick={() => axios.post("/play", { index })}
                   style={{ cursor: "pointer" }}
                 >
                   Lire
                 </Badge>
                 <Badge
-                  // onClick={() => handleFileDownload(file)}
+                  onClick={() => axios.post("/stop", { index })}
                   style={{ cursor: "pointer" }}
                 >
-                  Pause
+                  Stopper
+                </Badge>
+              </td>
+              <td>
+                <Badge
+                  color="red"
+                  onClick={() =>
+                    axios.post("/delete", { index }).then(() => fetchData())
+                  }
+                  style={{ cursor: "pointer" }}
+                >
+                  Supprimer
                 </Badge>
               </td>
             </tr>
