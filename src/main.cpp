@@ -49,8 +49,10 @@
 #define I2S_BCLK 27
 #define I2S_LRC 26
 
-String ssid = "SFR_B4C8";                 // nom du routeur
-String password = "enorksenez3vesterish"; // mot de passe
+// String ssid = "SFR_B4C8";                 // nom du routeur
+String ssid = "Livebox-75C0";                 // nom du routeur
+// String password = "enorksenez3vesterish"; // mot de passe
+String password = "ipW2j3EzJQg6LF9Er6"; // mot de passe
 
 IPAddress ip(192, 168, 0, 225);    // Local IP (static)
 IPAddress gateway(192, 168, 0, 1); // Router IP
