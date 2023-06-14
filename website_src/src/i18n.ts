@@ -19,9 +19,12 @@ i18n.use(initReactI18next).init({
           dropFile: "Drop your files here",
           orSelectFile: "or clic on select file",
           selectFile: "Select file",
-		  fileToImport: "File to import",
+          fileToImport: "File to import",
           size: "Size",
           downloadOnComputer: "Download on computer",
+          download: "Download",
+		  sendFile: "Send file"
+
         },
         title: "Multi-language app",
         label: "Select another language!",
@@ -41,6 +44,8 @@ i18n.use(initReactI18next).init({
           fileToImport: "Fichier à importer",
           size: "Taille",
           downloadOnComputer: "Télecharger sur l'ordinateur",
+          download: "Télecharger",
+		  sendFile: "Envoyer le fichier"
         },
         title: "Application disponible en plusieurs langues",
         label: "Selectionnez un autre langage",

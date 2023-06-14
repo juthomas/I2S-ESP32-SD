@@ -258,7 +258,6 @@ export const UploadFile = ({
 
       <Group position="center" mt="md">
         <Button onClick={() => openRef.current?.()}>
-          {/* Selectionner les fichiers */}
           {t("UploadFile.selectFile")}
         </Button>
       </Group>
@@ -281,7 +280,7 @@ export const UploadFile = ({
                   onClick={() => handleFileDownload(file)}
                   style={{ cursor: "pointer" }}
                 >
-                  Télecharger
+                  {t("UploadFile.download")}
                 </Badge>
               </td>
             </tr>
@@ -294,7 +293,7 @@ export const UploadFile = ({
           <List.Item key={index} onClick={() => handleFileDownload(file)}>{file.name} {formatFileSize(file)}</List.Item>
         ))} */}
       </List>
-      <Button onClick={() => sendFile()}>Envoyer le fichier</Button>
+      <Button onClick={() => sendFile()}>{t("UploadFile.sendFile")}</Button>
       <Progress
         m={5}
         radius={"xl"}
