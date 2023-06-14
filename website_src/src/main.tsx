@@ -4,6 +4,7 @@ import App from "./App";
 import "./index.css";
 import { MantineProvider } from "@mantine/core";
 import { Notifications } from '@mantine/notifications';
+import "./i18n";
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
