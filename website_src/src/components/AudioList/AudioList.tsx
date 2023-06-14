@@ -2,6 +2,7 @@ import { ActionIcon, Badge, Box, Table, Title } from "@mantine/core";
 import { IconRefresh } from "@tabler/icons-react";
 import axios from "axios";
 import { Data } from "../../App";
+import { useTranslation } from "react-i18next";
 
 const handleLinkDownload = (link: string) => {
   // Créez une URL pour le fichier
@@ -24,6 +25,8 @@ interface AudioListProps {
 }
 
 export const AudioList = ({ data, fetchData }: AudioListProps): JSX.Element => {
+  const { t } = useTranslation();
+
   return (
     <>
       <Box sx={{ display: "flex", justifyContent: "space-between" }}>
@@ -36,11 +39,11 @@ export const AudioList = ({ data, fetchData }: AudioListProps): JSX.Element => {
       <Table>
         <thead>
           <tr>
-            <th>Fichier</th>
-            <th>Index</th>
-            <th>Télecharger sur l'ordinateur</th>
-            <th>Lire sur l'ESP</th>
-            <th>Supprimer</th>
+            <th>{t("AudioList.file")}</th>
+            <th>{t("AudioList.index")}</th>
+            <th>{t("AudioList.downloadOnComputer")}</th>
+            <th>{t("AudioList.playOnESP")}</th>
+            <th>{t("AudioList.suppress")}</th>
           </tr>
         </thead>
         <tbody>
@@ -53,7 +56,7 @@ export const AudioList = ({ data, fetchData }: AudioListProps): JSX.Element => {
                   onClick={() => handleLinkDownload(element.path)}
                   style={{ cursor: "pointer" }}
                 >
-                  Télecharger
+                  {t("AudioList.download")}
                 </Badge>
               </td>
               <td>
@@ -61,13 +64,14 @@ export const AudioList = ({ data, fetchData }: AudioListProps): JSX.Element => {
                   onClick={() => axios.post("/play", { index })}
                   style={{ cursor: "pointer" }}
                 >
-                  Lire
+                  {t("AudioList.play")}
                 </Badge>
                 <Badge
                   onClick={() => axios.post("/stop", { index })}
                   style={{ cursor: "pointer" }}
                 >
-                  Stopper
+                  {t("AudioList.stop")}
+
                 </Badge>
               </td>
               <td>
@@ -78,7 +82,7 @@ export const AudioList = ({ data, fetchData }: AudioListProps): JSX.Element => {
                   }
                   style={{ cursor: "pointer" }}
                 >
-                  Supprimer
+                  {t("AudioList.suppress")}
                 </Badge>
               </td>
             </tr>

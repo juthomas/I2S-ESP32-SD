@@ -23,8 +23,17 @@ i18n.use(initReactI18next).init({
           size: "Size",
           downloadOnComputer: "Download on computer",
           download: "Download",
-		  sendFile: "Send file"
-
+          sendFile: "Send file",
+        },
+        AudioList: {
+          download: "Download",
+          play: "Play",
+          stop: "Stop",
+          suppress: "Suppress",
+		  file: "File",
+		  index: "Index",
+		  downloadOnComputer: "Download on computer",
+		  playOnESP : "Play on ESP"
         },
         title: "Multi-language app",
         label: "Select another language!",
@@ -45,7 +54,17 @@ i18n.use(initReactI18next).init({
           size: "Taille",
           downloadOnComputer: "Télecharger sur l'ordinateur",
           download: "Télecharger",
-		  sendFile: "Envoyer le fichier"
+          sendFile: "Envoyer le fichier",
+        },
+        AudioList: {
+          download: "Télecharger",
+          play: "Lire",
+          stop: "Stopper",
+          suppress: "Supprimer",
+		  file: "Fichier",
+		  index: "Index",
+		  downloadOnComputer: "Télecharger sur l'ordinateur",
+		  playOnESP : "Lire sur l'ESP"
         },
         title: "Application disponible en plusieurs langues",
         label: "Selectionnez un autre langage",
