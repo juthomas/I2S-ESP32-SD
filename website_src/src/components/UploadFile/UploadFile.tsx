@@ -156,8 +156,6 @@ export const UploadFile = ({
 
   return (
     <>
-      <Text> {t("title")}</Text>
-
       <Dropzone
         h={200}
         multiple={false}
@@ -165,55 +163,10 @@ export const UploadFile = ({
         onDrop={(files) => {
           console.log("accepted files", files);
           setFiles(files);
-
-          console.log("before async");
-
-          // (async () => {
-          //   console.log("before stream");
-          //   let fileBuffer = await files[0].arrayBuffer();
-          //   console.log("before await");
-          //   const uint8Array = new Uint8Array(fileBuffer);
-          //   const metadata = await mm.parseBuffer(uint8Array);
-          //   console.log("file format :", metadata.format);
-          // })()
-
-          (async () => {
-            const fileUrl = URL.createObjectURL(files[0]);
-            try {
-              // const metadata = await parseFile(fileUrl);
-              // console.log("MetaDatas", metadata);
-              // console.log(inspect(metadata, { showHidden: false, depth: null }));
-            } catch (error) {
-              console.error("error :", error);
-            }
-          })();
-
-          // const file = files[0];
-          // const reader = new FileReader();
-
-          // reader.onload = async (event) => {
-          //   const arrayBuffer = event.target?.result;
-          //   if (!arrayBuffer) return;
-          //   try {
-          //     let fileBuffer = await files[0].arrayBuffer();
-          //     console.log("fileBuffer :", fileBuffer);
-          //     const uint8Array = new Uint8Array(fileBuffer);
-          //     console.log("uint8Array :", uint8Array);
-          //     const metadata = await mm.parseBuffer(uint8Array, 'audio/mp3');
-          //     console.log("metadata :", metadata);
-          //     const bitDepth = metadata.format.bitsPerSample;
-          //     console.log("Bit Depth:", bitDepth);
-          //   } catch (error) {
-          //     console.error("Error reading audio file:", error);
-          //   }
-          // };
-
-          // reader.readAsArrayBuffer(file);
         }}
         onReject={(files) => console.log("rejected files", files)}
         styles={{ inner: { height: "100%" } }}
       >
-        {/* <Group position="center"  spacing="xl" style={{  pointerEvents: 'none' }}> */}
         <Box
           sx={{
             display: "flex",
@@ -288,11 +241,6 @@ export const UploadFile = ({
         </tbody>
       </Table>
 
-      <List size="sm" mt={5} withPadding>
-        {/*         
-          <List.Item key={index} onClick={() => handleFileDownload(file)}>{file.name} {formatFileSize(file)}</List.Item>
-        ))} */}
-      </List>
       <Button onClick={() => sendFile()}>{t("UploadFile.sendFile")}</Button>
       <Progress
         m={5}
