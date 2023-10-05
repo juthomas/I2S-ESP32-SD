@@ -27,7 +27,7 @@ Les signaux UDP peuvent être testés et envoyés grâve à la commande `nc -u 1
 	- **MISO** : Broche 19
 	- **SCK** : Broche 18
 - Amplificateur I2S :
-	- **DOUT** : Broche 25
+	- **DIN** : Broche 25
 	- **BCLK** : Broche 27
 	- **LRC** : Broche 26
 
