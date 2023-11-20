@@ -50,9 +50,11 @@
 #define I2S_LRC 26
 
 // String ssid = "SFR_B4C8";                 // nom du routeur
-String ssid = "Livebox-75C0";                 // nom du routeur
+// String ssid = "Livebox-75C0";                 // nom du routeur
+String ssid = "Bbox-7A159A77-2.4G";                 // nom du routeur
 // String password = "enorksenez3vesterish"; // mot de passe
-String password = "ipW2j3EzJQg6LF9Er6"; // mot de passe
+// String password = "ipW2j3EzJQg6LF9Er6"; // mot de passe
+String password = "UxWygsEU44zhs3ynNG"; // mot de passe
 
 IPAddress ip(192, 168, 0, 225);    // Local IP (static)
 IPAddress gateway(192, 168, 0, 1); // Router IP
@@ -417,6 +419,8 @@ void handleFileUpload(AsyncWebServerRequest *request, String filename, size_t in
 void setup()
 {
     pinMode(SD_CS, OUTPUT);
+    pinMode(2, OUTPUT);///
+    digitalWrite(2, 1);///
     digitalWrite(SD_CS, HIGH);
     SPI.begin(SPI_SCK, SPI_MISO, SPI_MOSI);
     Serial.begin(115200);
@@ -452,6 +456,7 @@ void setup()
         delay(500);
     }
     Serial.println("Connected");
+    digitalWrite(2, 0);///
     udp.begin(localPort);
     if (DEBUG)
     {
@@ -543,7 +548,10 @@ void splitString(String message, char separator, String data[5])
 void loop()
 {
     audio.loop();
-
+    static int32_t test = 0;
+    digitalWrite(2, test < 500 ? 0 : 1);
+    test++;
+    test = test == 1000 ? 0 : test;
     int packetSize = udp.parsePacket();
     if (packetSize)
     {
