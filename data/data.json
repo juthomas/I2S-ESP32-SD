@@ -4,5 +4,5 @@
   "note": "notes pour plus tard...",
   "udp_port": 8266,
   "volume": 60,
-  "track_assignation": [{ "path": "/osc.wav", "index": 1 }, { "path": "/music2.wav", "index": 2 }]
+  "track_assignation": []
 }
