@@ -30,7 +30,7 @@ export const AudioList = ({ data, fetchData }: AudioListProps): JSX.Element => {
   return (
     <>
       <Box sx={{ display: "flex", justifyContent: "space-between" }}>
-        <Title order={4}>Fichiers présents sur la carte SD</Title>
+        <Title order={4}>{t("AudioList.filesOnSdCard")}</Title>
         <ActionIcon variant="filled" color="blue" onClick={() => fetchData()}>
           <IconRefresh />
         </ActionIcon>

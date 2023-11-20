@@ -13,6 +13,7 @@ import { IconSettings } from "@tabler/icons-react";
 import axios from "axios";
 import { Data } from "../../App";
 import { useEffect } from "react";
+import { useTranslation } from "react-i18next";
 
 interface SettingsProps {
   data?: Data;
@@ -20,6 +21,7 @@ interface SettingsProps {
 }
 
 export const Settings = ({ data, fetchData }: SettingsProps): JSX.Element => {
+  const { t } = useTranslation();
   const [opened, { open, close }] = useDisclosure(false);
   const form = useForm({
     initialValues: {
@@ -42,7 +44,7 @@ export const Settings = ({ data, fetchData }: SettingsProps): JSX.Element => {
 
   return (
     <>
-      <Modal opened={opened} onClose={close} title="Parametres" centered>
+      <Modal opened={opened} onClose={close} title={t("Parameters.parameters")} centered>
         <form
           onSubmit={form.onSubmit(() => {
             console.log("Form Values", form.values);
@@ -53,37 +55,37 @@ export const Settings = ({ data, fetchData }: SettingsProps): JSX.Element => {
         >
           <Switch
             labelPosition="left"
-            label="Loop audio"
+            label={t("Parameters.loopAudio")}
             {...form.getInputProps("loop_file", { type: "checkbox" })}
           />
           <Switch
             mt="md"
             labelPosition="left"
-            label="Lecture auto"
+            label={t("Parameters.autoPlay")}
             {...form.getInputProps("auto_play", { type: "checkbox" })}
           />
           <TextInput
             mt="md"
-            label="Notes"
+            label={t("Parameters.notes")}
             placeholder="Notes..."
             {...form.getInputProps("note")}
           />
           <NumberInput
             mt="md"
-            label="Port Udp"
+            label={t("Parameters.udpPort")}
             max={99999}
             min={0}
             {...form.getInputProps("udp_port")}
           />
           <NumberInput
             mt="md"
-            label="Volume"
+            label={t("Parameters.volume")}
             max={255}
             min={0}
             {...form.getInputProps("volume")}
           />
           <Flex justify={"space-between"} mt="md">
-            <Button type="submit">Save</Button>
+            <Button type="submit">{t("Parameters.save")}</Button>
             {/* <ActionIcon onClick={updateValues} variant="filled" size="2.2rem">
               <IconRefresh size="1.5rem" />
             </ActionIcon> */}

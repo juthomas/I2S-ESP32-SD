@@ -12,6 +12,15 @@ i18n.use(initReactI18next).init({
   resources: {
     en: {
       translation: {
+        Parameters: {
+          parameters: "Parameters",
+          loopAudio: "Audio loop",
+          autoPlay: "Auto play",
+          notes: "Notes",
+          udpPort: "UDP Port",
+          volume: "volume",
+          save: "Save",
+        },
         UploadFile: {
           hoursLeft: "{{hours}} hours left",
           minsLeft: "{{mins}} mins left",
@@ -26,14 +35,15 @@ i18n.use(initReactI18next).init({
           sendFile: "Send file",
         },
         AudioList: {
+          filesOnSdCard: "Files on SD card",
           download: "Download",
           play: "Play",
           stop: "Stop",
           suppress: "Suppress",
-		  file: "File",
-		  index: "Index",
-		  downloadOnComputer: "Download on computer",
-		  playOnESP : "Play on ESP"
+          file: "File",
+          index: "Index",
+          downloadOnComputer: "Download on computer",
+          playOnESP: "Play on ESP",
         },
         title: "Multi-language app",
         label: "Select another language!",
@@ -43,6 +53,15 @@ i18n.use(initReactI18next).init({
     },
     fr: {
       translation: {
+        Parameters: {
+          parameters: "Paramètres",
+          loopAudio: "Boucle audio",
+          autoPlay: "Lecture automatique",
+          notes: "Notes",
+          udpPort: "Port UDP",
+          volume: "volume",
+          save: "Sauvegarder",
+        },
         UploadFile: {
           hoursLeft: "{{hours}} heures restantes",
           minsLeft: "{{mins}} minutes restantes",
@@ -57,14 +76,15 @@ i18n.use(initReactI18next).init({
           sendFile: "Envoyer le fichier",
         },
         AudioList: {
+          filesOnSdCard: "Fichiers présents sur la carte SD",
           download: "Télecharger",
           play: "Lire",
           stop: "Stopper",
           suppress: "Supprimer",
-		  file: "Fichier",
-		  index: "Index",
-		  downloadOnComputer: "Télecharger sur l'ordinateur",
-		  playOnESP : "Lire sur l'ESP"
+          file: "Fichier",
+          index: "Index",
+          downloadOnComputer: "Télecharger sur l'ordinateur",
+          playOnESP: "Lire sur l'ESP",
         },
         title: "Application disponible en plusieurs langues",
         label: "Selectionnez un autre langage",
