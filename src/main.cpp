@@ -51,7 +51,7 @@
 
 // String ssid = "SFR_B4C8";                 // nom du routeur
 // String ssid = "Livebox-75C0";                 // nom du routeur
-String ssid = "Bbox-7A159A77-2.4G";                 // nom du routeur
+String ssid = "Bbox-7A159A77-2.4G"; // nom du routeur
 // String password = "enorksenez3vesterish"; // mot de passe
 // String password = "ipW2j3EzJQg6LF9Er6"; // mot de passe
 String password = "UxWygsEU44zhs3ynNG"; // mot de passe
@@ -229,6 +229,44 @@ void load_spiffs()
     for (std::vector<t_music_data>::size_type i = 0; i != music_data.size(); i++)
     {
         Serial.printf("SPIFFS track_assignation (path:'%s' index:%d)\n", music_data[i].path.c_str(), music_data[i].index);
+    }
+}
+
+void load_json_config_on_sd(const char *filename)
+{
+    File jsonFile = SD.open(filename, FILE_READ);
+    if (!jsonFile)
+    {
+        Serial.println("Json Config file not found on SD card !");
+        return;
+    }
+
+    String jsonContent;
+    while (jsonFile.available())
+    {
+        jsonContent += char(jsonFile.read());
+    }
+    jsonFile.close();
+
+    StaticJsonDocument<2048> doc;
+
+    DeserializationError error = deserializeJson(doc, jsonContent);
+    if (error)
+    {
+        Serial.println(error.c_str());
+        return;
+    }
+    if (doc.containsKey("ssid"))
+    {
+        ssid = doc["ssid"].as<String>();
+        Serial.print("ssid on sd card :");
+        Serial.println(ssid);
+    }
+    if (doc.containsKey("password"))
+    {
+        password = doc["password"].as<String>();
+        Serial.print("password on sd card :");
+        Serial.println(password);
     }
 }
 
@@ -419,8 +457,8 @@ void handleFileUpload(AsyncWebServerRequest *request, String filename, size_t in
 void setup()
 {
     pinMode(SD_CS, OUTPUT);
-    pinMode(2, OUTPUT);///
-    digitalWrite(2, 1);///
+    pinMode(2, OUTPUT); ///
+    digitalWrite(2, 1); ///
     digitalWrite(SD_CS, HIGH);
     SPI.begin(SPI_SCK, SPI_MISO, SPI_MOSI);
     Serial.begin(115200);
@@ -439,6 +477,8 @@ void setup()
         // return;
     }
     Serial.println("SPIFFS initialization done.");
+    load_json_config_on_sd("/config.json");
+
 
     load_spiffs();
     Serial.printf("JSON : %s/n", local_vars_to_json().c_str());
@@ -449,14 +489,14 @@ void setup()
     }
     WiFi.begin(ssid.c_str(), password.c_str());
 
-    Serial.print("Connecting ");
+    Serial.print("Connecting to \"" + ssid + "\"");
     while (WiFi.status() != WL_CONNECTED)
     {
         Serial.print("...");
         delay(500);
     }
     Serial.println("Connected");
-    digitalWrite(2, 0);///
+    digitalWrite(2, 0); ///
     udp.begin(localPort);
     if (DEBUG)
     {
