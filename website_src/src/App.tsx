@@ -40,25 +40,25 @@ function App() {
       const response = await fetch("/data");
       console.log("Response :", response);
       if (response.ok) {
-        setData({
-          loop_file: true,
-          auto_play: false,
-          note: "notes pour plus tard...",
-          udp_port: 8266,
-          volume: 60,
-          track_assignation: [
-            {
-              path: "/osc.wav",
-              index: 1,
-            },
-            {
-              path: "/music2.wav",
-              index: 2,
-            },
-          ],
-        });
-        // const data: Data = await response.json();
-        // setData(data);
+        // setData({
+        //   loop_file: true,
+        //   auto_play: false,
+        //   note: "notes pour plus tard...",
+        //   udp_port: 8266,
+        //   volume: 60,
+        //   track_assignation: [
+        //     {
+        //       path: "/osc.wav",
+        //       index: 1,
+        //     },
+        //     {
+        //       path: "/music2.wav",
+        //       index: 2,
+        //     },
+        //   ],
+        // });
+        const data: Data = await response.json();
+        setData(data);
         console.log("Fetched data :", data);
       } else {
         console.error("Failed to fetch sensor data");

@@ -47,7 +47,7 @@ export const AudioList = ({ data, fetchData }: AudioListProps): JSX.Element => {
           </tr>
         </thead>
         <tbody>
-          {data?.track_assignation.map((element, index) => (
+          {data?.track_assignation?.map((element, index) => (
             <tr key={index}>
               <td>{element.path.substring(1)}</td>
               <td>{element.index}</td>
