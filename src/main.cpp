@@ -50,11 +50,11 @@
 #define I2S_LRC 26
 
 // String ssid = "SFR_B4C8";                 // nom du routeur
-// String ssid = "Livebox-75C0";                 // nom du routeur
-String ssid = "Bbox-7A159A77-2.4G"; // nom du routeur
+String ssid = "Livebox-75C0";                 // nom du routeur
+// String ssid = "Bbox-7A159A77-2.4G"; // nom du routeur
 // String password = "enorksenez3vesterish"; // mot de passe
-// String password = "ipW2j3EzJQg6LF9Er6"; // mot de passe
-String password = "UxWygsEU44zhs3ynNG"; // mot de passe
+String password = "ipW2j3EzJQg6LF9Er6"; // mot de passe
+// String password = "UxWygsEU44zhs3ynNG"; // mot de passe
 
 IPAddress ip(192, 168, 0, 225);    // Local IP (static)
 IPAddress gateway(192, 168, 0, 1); // Router IP
@@ -295,6 +295,7 @@ std::vector<String> listSdFiles(const char *dirname)
             break;
         }
         String nameString = String(entry.name());
+        nameString.toLowerCase();
         if (!nameString.startsWith("/.") && (nameString.endsWith(".wav") || nameString.endsWith(".mp3")))
         {
             // Afficher le nom du fichier
