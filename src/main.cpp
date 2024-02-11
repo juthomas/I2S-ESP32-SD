@@ -49,22 +49,24 @@
 #define I2S_BCLK 27
 #define I2S_LRC 26
 
+String ssid = "TP-Link_F047";
+String password = "69407901";
 // String ssid = "SFR_B4C8";                 // nom du routeur
-String ssid = "Livebox-75C0";                 // nom du routeur
+// String ssid = "Livebox-75C0";                 // nom du routeur
 // String ssid = "Bbox-7A159A77-2.4G"; // nom du routeur
 // String password = "enorksenez3vesterish"; // mot de passe
-String password = "ipW2j3EzJQg6LF9Er6"; // mot de passe
+// String password = "ipW2j3EzJQg6LF9Er6"; // mot de passe
 // String password = "UxWygsEU44zhs3ynNG"; // mot de passe
 
-IPAddress ip(192, 168, 0, 225);    // Local IP (static)
-IPAddress gateway(192, 168, 0, 1); // Router IP
+IPAddress ip(192, 168, 0, 104);    // Local IP (static)
+IPAddress gateway(192, 168, 0, 2); // Router IP
 unsigned int localPort = 8266;     // port de reception UDP
 IPAddress subnet(255, 255, 255, 0);
 
-bool loop_file = true;                // Default loop audio files
-const bool REQUEST_STATIC_IP = false; // Demander l'attribution d'une ip statique
-bool auto_play = false;               // Lit la premiere track au demarrage
-const bool DEBUG = true;              // Afficher les messages dans la console
+bool loop_file = true;               // Default loop audio files
+const bool REQUEST_STATIC_IP = true; // Demander l'attribution d'une ip statique
+bool auto_play = false;              // Lit la premiere track au demarrage
+const bool DEBUG = true;             // Afficher les messages dans la console
 namespace patch
 {
     template <typename T>
@@ -457,6 +459,12 @@ void handleFileUpload(AsyncWebServerRequest *request, String filename, size_t in
 
 void setup()
 {
+    ledcSetup(0, 1000, 8);
+    ledcSetup(1, 1000, 8);
+    // Assigne le canal PWM au pins
+    ledcAttachPin(13, 0);
+    ledcAttachPin(16, 1);
+
     pinMode(SD_CS, OUTPUT);
     pinMode(2, OUTPUT); ///
     digitalWrite(2, 1); ///
@@ -479,7 +487,6 @@ void setup()
     }
     Serial.println("SPIFFS initialization done.");
     load_json_config_on_sd("/config.json");
-
 
     load_spiffs();
     Serial.printf("JSON : %s/n", local_vars_to_json().c_str());
@@ -688,6 +695,18 @@ void loop()
             //"T -40 0 6" values can be between -40 ... +6 (dB)
             audio.setTone(data[1].toInt(), data[2].toInt(), data[3].toInt());
             Serial.printf("Tone set to low:%d band:%d high:%d\n", data[1].toInt(), data[2].toInt(), data[3].toInt());
+        }
+        else if (data[0].c_str()[0] == 'I')
+        {
+            // Set GPIO to value
+            if (data[1].toInt() == 13)
+            {
+                ledcWrite(0, data[2].toInt());
+            }
+            else if (data[1].toInt() == 16)
+            {
+                ledcWrite(0, data[2].toInt());
+            }
         }
         else
         {
