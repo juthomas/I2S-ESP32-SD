@@ -49,14 +49,14 @@
 #define I2S_BCLK 27
 #define I2S_LRC 26
 
-String ssid = "TP-Link_F047";
-String password = "69407901";
+// String ssid = "TP-Link_F047";
+// String password = "69407901";
 // String ssid = "SFR_B4C8";                 // nom du routeur
 // String ssid = "Livebox-75C0";                 // nom du routeur
-// String ssid = "Bbox-7A159A77-2.4G"; // nom du routeur
+String ssid = "Bbox-7A159A77-2.4G";     // nom du routeur
+String password = "UxWygsEU44zhs3ynNG"; // mot de passe
 // String password = "enorksenez3vesterish"; // mot de passe
 // String password = "ipW2j3EzJQg6LF9Er6"; // mot de passe
-// String password = "UxWygsEU44zhs3ynNG"; // mot de passe
 
 IPAddress ip(192, 168, 0, 104);    // Local IP (static)
 IPAddress gateway(192, 168, 0, 2); // Router IP
@@ -64,7 +64,7 @@ unsigned int localPort = 8266;     // port de reception UDP
 IPAddress subnet(255, 255, 255, 0);
 
 bool loop_file = true;               // Default loop audio files
-const bool REQUEST_STATIC_IP = true; // Demander l'attribution d'une ip statique
+const bool REQUEST_STATIC_IP = false; // Demander l'attribution d'une ip statique
 bool auto_play = false;              // Lit la premiere track au demarrage
 const bool DEBUG = true;             // Afficher les messages dans la console
 namespace patch
@@ -702,10 +702,12 @@ void loop()
             if (data[1].toInt() == 13)
             {
                 ledcWrite(0, data[2].toInt());
+                Serial.printf("GPIO 13 set to :%d\n", data[2].toInt());
             }
             else if (data[1].toInt() == 16)
             {
-                ledcWrite(0, data[2].toInt());
+                ledcWrite(1, data[2].toInt());
+                Serial.printf("GPIO 16 set to :%d\n", data[2].toInt());
             }
         }
         else
