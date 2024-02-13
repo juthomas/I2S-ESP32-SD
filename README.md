@@ -18,7 +18,7 @@ Le lecteur audio peut être contrôlé à l'aide des signaux UDP suivants :
 - **Balance** : `B -16` à `B 16` : permet de régler l'équilibre audio entre les canaux gauche et droit.
 - **Jump** : `J 60` : permet de sauter à un endroit spécifique dans la piste audio. Le nombre spécifié représente le nombre de secondes.
 - **Tonality** : `T -40 0 6` : fonctionne comme un égaliseur, où le premier nombre correspond au gain pour les graves, le deuxième pour les médiums et le troisième pour les aigus. Le gain peut varier de -40 à 6 (en dB).
-- **GPIO** : `I 13 255` : controlle un GPIO de la carte (13 ou 16) avec un niveau d'intensitée allant de 0 à 255 (de 0V à 3.3V).
+- **GPIO** : `I 13 65535` : controlle un GPIO de la carte (13 ou 16) avec un niveau d'intensitée allant de 0 à 65535 (de 0V à 3.3V).
 
 
 Les signaux UDP peuvent être testés et envoyés grâve à la commande `nc -u 192.168.1.96 8266` où l'ip et le port de l'esp32 sont à renseigner

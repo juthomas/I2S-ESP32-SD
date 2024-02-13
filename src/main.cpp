@@ -459,8 +459,8 @@ void handleFileUpload(AsyncWebServerRequest *request, String filename, size_t in
 
 void setup()
 {
-    ledcSetup(0, 1000, 8);
-    ledcSetup(1, 1000, 8);
+    ledcSetup(0, 12000, 16);
+    ledcSetup(1, 12000, 16);
     // Assigne le canal PWM au pins
     ledcAttachPin(13, 0);
     ledcAttachPin(16, 1);
