@@ -49,12 +49,12 @@
 #define I2S_BCLK 27
 #define I2S_LRC 26
 
-// String ssid = "TP-Link_F047";
-// String password = "69407901";
+String ssid = "TP-Link_F047";
+String password = "69407901";
 // String ssid = "SFR_B4C8";                 // nom du routeur
 // String ssid = "Livebox-75C0";                 // nom du routeur
-String ssid = "Bbox-7A159A77-2.4G";     // nom du routeur
-String password = "UxWygsEU44zhs3ynNG"; // mot de passe
+// String ssid = "Bbox-7A159A77-2.4G";     // nom du routeur
+// String password = "UxWygsEU44zhs3ynNG"; // mot de passe
 // String password = "enorksenez3vesterish"; // mot de passe
 // String password = "ipW2j3EzJQg6LF9Er6"; // mot de passe
 
@@ -64,7 +64,7 @@ unsigned int localPort = 8266;     // port de reception UDP
 IPAddress subnet(255, 255, 255, 0);
 
 bool loop_file = true;               // Default loop audio files
-const bool REQUEST_STATIC_IP = false; // Demander l'attribution d'une ip statique
+const bool REQUEST_STATIC_IP = true; // Demander l'attribution d'une ip statique
 bool auto_play = false;              // Lit la premiere track au demarrage
 const bool DEBUG = true;             // Afficher les messages dans la console
 namespace patch
