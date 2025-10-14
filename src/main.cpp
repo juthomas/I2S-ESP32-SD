@@ -33,6 +33,7 @@
 #include "WiFi.h"
 #include "jsonParser.h"
 #include "ESPAsyncWebServer.h"
+#include <DNSServer.h>
 #include "Audio.h"
 #include "SD.h"
 #include "FS.h"
@@ -48,9 +49,11 @@
 #define I2S_DOUT 25
 #define I2S_BCLK 27
 #define I2S_LRC 26
+#define I2S_ENABLE 17
 
-String ssid = "TP-Link_F047";
-String password = "69407901";
+
+String ssid = "punkhazard";
+String password = "00000000";
 // String ssid = "SFR_B4C8";                 // nom du routeur
 // String ssid = "Livebox-75C0";                 // nom du routeur
 // String ssid = "Bbox-7A159A77-2.4G";     // nom du routeur
@@ -90,6 +93,7 @@ std::vector<String> files_list;
 Audio audio;
 WiFiUDP udp;
 AsyncWebServer server(80);
+DNSServer dnsServer;
 
 String getContentType(String filename)
 {
@@ -416,8 +420,8 @@ void handleRequest(AsyncWebServerRequest *request)
         }
     }
 
-    // Si le fichier n'existe pas ou s'il y a une erreur, renvoyer une réponse 404
-    request->send(404, "text/plain", "File not found on sd card");
+    // If not found on SD, serve portal index to keep captive experience
+    request->send(SPIFFS, "/index.html", String(), false);
 }
 File uploadFile;
 void handleFileUpload(AsyncWebServerRequest *request, String filename, size_t index, uint8_t *data, size_t len, bool final)
@@ -467,6 +471,8 @@ void setup()
 
     pinMode(SD_CS, OUTPUT);
     pinMode(2, OUTPUT); ///
+    pinMode(I2S_ENABLE, OUTPUT);
+    digitalWrite(I2S_ENABLE, 1);
     digitalWrite(2, 1); ///
     digitalWrite(SD_CS, HIGH);
     SPI.begin(SPI_SCK, SPI_MISO, SPI_MOSI);
@@ -490,30 +496,37 @@ void setup()
 
     load_spiffs();
     Serial.printf("JSON : %s/n", local_vars_to_json().c_str());
-    WiFi.mode(WIFI_STA);
-    if (REQUEST_STATIC_IP)
-    {
-        WiFi.config(ip, gateway, subnet); // Static IP Address
-    }
-    WiFi.begin(ssid.c_str(), password.c_str());
+    WiFi.mode(WIFI_AP);
+    // Optional: ensure a common AP IP like 192.168.4.1
+    WiFi.softAP(ssid.c_str(), password.c_str());
 
-    Serial.print("Connecting to \"" + ssid + "\"");
-    while (WiFi.status() != WL_CONNECTED)
-    {
-        Serial.print("...");
-        delay(500);
-    }
-    Serial.println("Connected");
+    // Start DNS server for captive portal: resolve all domains to AP IP
+    dnsServer.start(53, "*", WiFi.softAPIP());
+
+    Serial.print("Starting AP \"" + ssid + "\"");
+    delay(100);
+    Serial.println("... done");
     digitalWrite(2, 0); ///
     udp.begin(localPort);
     if (DEBUG)
     {
         Serial.begin(115200);
         Serial.print("IP: ");
-        Serial.println(WiFi.localIP());
+        Serial.println(WiFi.softAPIP());
     }
     server.on("/", HTTP_ANY, [](AsyncWebServerRequest *request)
               { request->send(SPIFFS, "/index.html", String(), false); });
+    // Captive portal endpoints used by OS connectivity checks
+    // Android
+    server.on("/generate_204", HTTP_ANY, [](AsyncWebServerRequest *request) { request->send(200, "text/html", "<html><meta http-equiv=\"refresh\" content=\"0; url=/\"></html>"); });
+    // iOS/macOS
+    server.on("/hotspot-detect.html", HTTP_ANY, [](AsyncWebServerRequest *request) { request->send(200, "text/html", "<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>"); });
+    server.on("/success.html", HTTP_ANY, [](AsyncWebServerRequest *request) { request->send(200, "text/html", "Success"); });
+    // Windows
+    server.on("/ncsi.txt", HTTP_ANY, [](AsyncWebServerRequest *request) { request->send(200, "text/plain", "Microsoft NCSI"); });
+    server.on("/connecttest.txt", HTTP_ANY, [](AsyncWebServerRequest *request) { request->send(200, "text/plain", "" ); });
+    server.on("/library/test/success.html", HTTP_ANY, [](AsyncWebServerRequest *request) { request->send(200, "text/html", "Success"); });
+    server.on("/success.txt", HTTP_ANY, [](AsyncWebServerRequest *request) { request->send(200, "text/plain", "Success"); });
     // server.on(
     //     "/edit", HTTP_POST, [](AsyncWebServerRequest *request)
     //     { request->send(200); },
@@ -596,6 +609,7 @@ void splitString(String message, char separator, String data[5])
 void loop()
 {
     audio.loop();
+    dnsServer.processNextRequest();
     static int32_t test = 0;
     digitalWrite(2, test < 500 ? 0 : 1);
     test++;
