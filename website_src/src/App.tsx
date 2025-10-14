@@ -88,37 +88,7 @@ function App() {
               : theme.colors.gray[0],
         },
       }}
-      header={
-        <Header height={{ base: 50, md: 70 }} p="md">
-          <div
-            style={{ display: "flex", alignItems: "center", height: "100%" }}
-          >
-            {/* <MediaQuery largerThan="sm" styles={{ display: 'none' }}>
-          <Burger
-            opened={opened}
-            onClick={() => setOpened((o) => !o)}
-            size="sm"
-            color={theme.colors.gray[6]}
-            mr="xl"
-          />
-        </MediaQuery> */}
 
-            <Text color={ colorScheme === "light" ? "blue" : "red"}>Application header</Text>
-            <ActionIcon
-              variant="outline"
-              color={dark ? "yellow" : "blue"}
-              onClick={() => toggleColorScheme()}
-              title="Toggle color scheme"
-            >
-              {dark ? (
-                <IconSun size="1.1rem" />
-              ) : (
-                <IconMoonStars size="1.1rem" />
-              )}
-            </ActionIcon>
-          </div>
-        </Header>
-      }
     >
       <Paper shadow="sm" p="md" m="lg">
         <Settings data={data} fetchData={fetchData} />

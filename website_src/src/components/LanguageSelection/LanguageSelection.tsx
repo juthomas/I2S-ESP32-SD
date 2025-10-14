@@ -9,7 +9,6 @@ export const LanguageSelection = ({}): JSX.Element => {
   };
   return (
     <>
-      <Text> {t("title")}</Text>
       <select defaultValue={i18n.language} onChange={onChangeLang}>
         {LANGUAGES.map(({ code, label }) => (
           <option key={code} value={code}>
