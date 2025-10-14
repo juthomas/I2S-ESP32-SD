@@ -34,6 +34,9 @@
 #include "jsonParser.h"
 #include "ESPAsyncWebServer.h"
 #include <DNSServer.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/queue.h"
+#include "freertos/task.h"
 #include "Audio.h"
 #include "SD.h"
 #include "FS.h"
@@ -50,6 +53,10 @@
 #define I2S_BCLK 27
 #define I2S_LRC 26
 #define I2S_ENABLE 17
+// Buttons to adjust audio balance
+#define BTN_INC_BAL 14 // increase balance (right)
+#define BTN_DEC_BAL 16 // decrease balance (left)
+#define BTN_PLAY_PAUSE 33 // toggle play/pause
 
 
 String ssid = "punkhazard";
@@ -94,6 +101,82 @@ Audio audio;
 WiFiUDP udp;
 AsyncWebServer server(80);
 DNSServer dnsServer;
+// Balance control state
+int8_t currentBalance = 0;               // valid range: -16 (left) .. +16 (right)
+bool prevBtnIncPressed = true;           // using INPUT_PULLUP, idle is HIGH
+bool prevBtnDecPressed = true;           // using INPUT_PULLUP, idle is HIGH
+unsigned long lastBalanceButtonMs = 0;   // debounce timer
+const unsigned long balanceDebounceMs = 200;
+
+// FreeRTOS primitives for button handling via ISR
+typedef enum { BTN_EVT_INC = 1, BTN_EVT_DEC = 2, BTN_EVT_PLAY_PAUSE = 3 } ButtonEvent;
+static QueueHandle_t buttonQueue = NULL;
+static TaskHandle_t buttonTaskHandle = NULL;
+
+void IRAM_ATTR isrBtnInc()
+{
+    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+    ButtonEvent evt = BTN_EVT_INC;
+    if (buttonQueue)
+        xQueueSendFromISR(buttonQueue, &evt, &xHigherPriorityTaskWoken);
+    if (xHigherPriorityTaskWoken)
+        portYIELD_FROM_ISR();
+}
+
+void IRAM_ATTR isrBtnDec()
+{
+    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+    ButtonEvent evt = BTN_EVT_DEC;
+    if (buttonQueue)
+        xQueueSendFromISR(buttonQueue, &evt, &xHigherPriorityTaskWoken);
+    if (xHigherPriorityTaskWoken)
+        portYIELD_FROM_ISR();
+}
+
+void IRAM_ATTR isrBtnPlayPause()
+{
+    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+    ButtonEvent evt = BTN_EVT_PLAY_PAUSE;
+    if (buttonQueue)
+        xQueueSendFromISR(buttonQueue, &evt, &xHigherPriorityTaskWoken);
+    if (xHigherPriorityTaskWoken)
+        portYIELD_FROM_ISR();
+}
+
+void buttonTask(void *param)
+{
+    ButtonEvent evt;
+    TickType_t lastChange = 0;
+    const TickType_t debounceTicks = pdMS_TO_TICKS(120);
+    for (;;)
+    {
+        if (xQueueReceive(buttonQueue, &evt, portMAX_DELAY) == pdTRUE)
+        {
+            TickType_t now = xTaskGetTickCount();
+            if (now - lastChange < debounceTicks)
+                continue;
+            lastChange = now;
+
+            if (evt == BTN_EVT_INC && currentBalance < 16)
+            {
+                currentBalance++;
+                audio.setBalance(currentBalance);
+                Serial.printf("[BTN IO14] Balance: %d\n", currentBalance);
+            }
+            else if (evt == BTN_EVT_DEC && currentBalance > -16)
+            {
+                currentBalance--;
+                audio.setBalance(currentBalance);
+                Serial.printf("[BTN IO16] Balance: %d\n", currentBalance);
+            }
+            else if (evt == BTN_EVT_PLAY_PAUSE)
+            {
+                audio.pauseResume();
+                Serial.printf("[BTN IO33] %s\n", audio.isRunning() ? "Resumed" : "Paused");
+            }
+        }
+    }
+}
 
 String getContentType(String filename)
 {
@@ -467,12 +550,21 @@ void setup()
     ledcSetup(1, 12000, 16);
     // Assigne le canal PWM au pins
     ledcAttachPin(13, 0);
-    ledcAttachPin(16, 1);
 
     pinMode(SD_CS, OUTPUT);
     pinMode(2, OUTPUT); ///
     pinMode(I2S_ENABLE, OUTPUT);
     digitalWrite(I2S_ENABLE, 1);
+    pinMode(BTN_INC_BAL, INPUT_PULLUP);
+    pinMode(BTN_DEC_BAL, INPUT_PULLUP);
+    pinMode(BTN_PLAY_PAUSE, INPUT_PULLUP);
+    // Setup FreeRTOS queue and task for button events
+    buttonQueue = xQueueCreate(8, sizeof(ButtonEvent));
+    xTaskCreatePinnedToCore(buttonTask, "buttonTask", 2048, NULL, 2, &buttonTaskHandle, 1);
+    // Attach interrupts on falling edge (active low buttons)
+    attachInterrupt(digitalPinToInterrupt(BTN_INC_BAL), isrBtnInc, FALLING);
+    attachInterrupt(digitalPinToInterrupt(BTN_DEC_BAL), isrBtnDec, FALLING);
+    attachInterrupt(digitalPinToInterrupt(BTN_PLAY_PAUSE), isrBtnPlayPause, FALLING);
     digitalWrite(2, 1); ///
     digitalWrite(SD_CS, HIGH);
     SPI.begin(SPI_SCK, SPI_MISO, SPI_MOSI);
@@ -568,6 +660,9 @@ void setup()
 
     audio.setVolumeSteps(255); // max 255
     audio.setVolume(volume);
+    // Initialize balance to center on boot
+    currentBalance = 0;
+    audio.setBalance(currentBalance);
 }
 
 bool need_to_play = true;
@@ -614,6 +709,7 @@ void loop()
     digitalWrite(2, test < 500 ? 0 : 1);
     test++;
     test = test == 1000 ? 0 : test;
+    // Button handling moved to ISR + FreeRTOS task
     int packetSize = udp.parsePacket();
     if (packetSize)
     {
@@ -720,8 +816,8 @@ void loop()
             }
             else if (data[1].toInt() == 16)
             {
-                ledcWrite(1, data[2].toInt());
-                Serial.printf("GPIO 16 set to :%d\n", data[2].toInt());
+                // IO16 is used as a button input; ignore PWM writes
+                Serial.printf("GPIO 16 is reserved for button input, ignoring write\n");
             }
         }
         else
