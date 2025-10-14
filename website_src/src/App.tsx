@@ -91,6 +91,9 @@ function App() {
 
     >
       <Paper shadow="sm" p="md" m="lg">
+        <Title order={1} className="balloon-title" style={{ textAlign: "center" }}>
+          PUNK HAZARD
+        </Title>
         <Settings data={data} fetchData={fetchData} />
         <LanguageSelection />
         <Title order={3}>Note :</Title>

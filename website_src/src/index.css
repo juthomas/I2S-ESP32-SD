@@ -1,3 +1,17 @@
 body {
   margin: 0;
 }
+
+@font-face {
+  font-family: 'Balloon';
+  src: url('/fonts/balloon.woff2') format('woff2'),
+       url('/fonts/balloon.ttf') format('truetype');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+.balloon-title {
+  font-family: 'Balloon', cursive, sans-serif;
+  line-height: 1.1;
+}
