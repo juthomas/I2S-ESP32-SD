@@ -42,6 +42,11 @@
 #include "FS.h"
 #include "sstream"
 
+#include "PCF8575.h"
+
+//  adjust addresses if needed
+PCF8575 PCF(0x20);
+
 // branchement Carte SD
 #define SD_CS 5
 #define SPI_MOSI 23
@@ -57,6 +62,9 @@
 #define BTN_INC_BAL 14 // increase balance (right)
 #define BTN_DEC_BAL 16 // decrease balance (left)
 #define BTN_PLAY_PAUSE 33 // toggle play/pause
+#define PCF_INT_PIN 15
+
+#define PCF_PULL_STATE LOW
 
 
 String ssid = "punkhazard";
@@ -109,7 +117,7 @@ unsigned long lastBalanceButtonMs = 0;   // debounce timer
 const unsigned long balanceDebounceMs = 200;
 
 // FreeRTOS primitives for button handling via ISR
-typedef enum { BTN_EVT_INC = 1, BTN_EVT_DEC = 2, BTN_EVT_PLAY_PAUSE = 3 } ButtonEvent;
+typedef enum { BTN_EVT_INC = 1, BTN_EVT_DEC = 2, BTN_EVT_PLAY_PAUSE = 3, BTN_EVT_PCF_INT = 4 } ButtonEvent;
 static QueueHandle_t buttonQueue = NULL;
 static TaskHandle_t buttonTaskHandle = NULL;
 
@@ -143,6 +151,25 @@ void IRAM_ATTR isrBtnPlayPause()
         portYIELD_FROM_ISR();
 }
 
+void IRAM_ATTR isrPCFInt()
+{
+    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+    ButtonEvent evt = BTN_EVT_PCF_INT;
+    if (buttonQueue)
+        xQueueSendFromISR(buttonQueue, &evt, &xHigherPriorityTaskWoken);
+    if (xHigherPriorityTaskWoken)
+        portYIELD_FROM_ISR();
+}
+
+// Configure all PCF8575 pins with pull up/pull down
+void pcfConfigureAllOutputs()
+{
+    for (uint8_t pin = 0; pin < 16; ++pin)
+    {
+        PCF.write(pin, PCF_PULL_STATE);
+    }
+}
+
 void buttonTask(void *param)
 {
     ButtonEvent evt;
@@ -153,7 +180,7 @@ void buttonTask(void *param)
         if (xQueueReceive(buttonQueue, &evt, portMAX_DELAY) == pdTRUE)
         {
             TickType_t now = xTaskGetTickCount();
-            if (now - lastChange < debounceTicks)
+            if (evt != BTN_EVT_PCF_INT && (now - lastChange < debounceTicks))
                 continue;
             lastChange = now;
 
@@ -173,6 +200,17 @@ void buttonTask(void *param)
             {
                 audio.pauseResume();
                 Serial.printf("[BTN IO33] %s\n", audio.isRunning() ? "Resumed" : "Paused");
+            }
+            else if (evt == BTN_EVT_PCF_INT)
+            {
+                pcfConfigureAllOutputs();
+                delay(1);
+                uint16_t pcfValue = 0;
+                for (uint8_t pin = 0; pin < 16; ++pin)
+                {
+                    if (PCF.read(pin)) pcfValue |= (1u << pin);
+                }
+                Serial.printf("[PCF8575 INT] value=0x%04X\n", pcfValue);
             }
         }
     }
@@ -544,6 +582,39 @@ void handleFileUpload(AsyncWebServerRequest *request, String filename, size_t in
     }
 }
 
+// Simple I2C scanner to help debug PCF presence on the bus
+void scanI2CBus()
+{
+    byte error;
+    byte address;
+    int nDevices = 0;
+    Serial.println("I2C scan start");
+    for (address = 1; address < 127; address++)
+    {
+        Wire.beginTransmission(address);
+        error = Wire.endTransmission();
+        if (error == 0)
+        {
+            Serial.printf("I2C device found at 0x%02X\n", address);
+            nDevices++;
+        }
+        else if (error == 4)
+        {
+            Serial.printf("Unknown error on address 0x%02X\n", address);
+        }
+    }
+    if (nDevices == 0)
+    {
+        Serial.println("No I2C devices found");
+    }
+    else
+    {
+        Serial.printf("I2C scan done, %d device(s) found\n", nDevices);
+    }
+}
+
+
+
 void setup()
 {
     ledcSetup(0, 12000, 16);
@@ -565,10 +636,34 @@ void setup()
     attachInterrupt(digitalPinToInterrupt(BTN_INC_BAL), isrBtnInc, FALLING);
     attachInterrupt(digitalPinToInterrupt(BTN_DEC_BAL), isrBtnDec, FALLING);
     attachInterrupt(digitalPinToInterrupt(BTN_PLAY_PAUSE), isrBtnPlayPause, FALLING);
+    // PCF8575 interrupt line on GPIO15
+    pinMode(PCF_INT_PIN, INPUT_PULLUP);
+    attachInterrupt(digitalPinToInterrupt(PCF_INT_PIN), isrPCFInt, FALLING);
     digitalWrite(2, 1); ///
     digitalWrite(SD_CS, HIGH);
     SPI.begin(SPI_SCK, SPI_MISO, SPI_MOSI);
     Serial.begin(115200);
+
+    // Initialize I2C explicitly on ESP32 default pins (SDA=21, SCL=22)
+    Wire.begin(21, 22);
+    Wire.setClock(100000); // 100 kHz for robust scanning
+
+    if (!PCF.begin())
+    {
+      Serial.println("could not initialize...");
+    }
+    if (!PCF.isConnected())
+    {
+      Serial.println("=> not connected");
+      scanI2CBus();
+    }
+    else
+    {
+      Serial.println("=> connected!!");
+      // Configure all lines as inputs and read their initial states
+      pcfConfigureAllOutputs();
+    }
+
     if (!SD.begin(SD_CS))
     {
         Serial.println("SD initialization failed!");
@@ -705,6 +800,7 @@ void loop()
 {
     audio.loop();
     dnsServer.processNextRequest();
+    // PCF8575 interrupt processing moved to FreeRTOS task (pcfIntTask)
     static int32_t test = 0;
     digitalWrite(2, test < 500 ? 0 : 1);
     test++;
