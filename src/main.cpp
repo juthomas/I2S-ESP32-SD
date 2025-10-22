@@ -46,6 +46,8 @@
 
 //  adjust addresses if needed
 PCF8575 PCF(0x20);
+// Memorize last read value of PCF pins (1 = HIGH, 0 = LOW)
+static uint16_t pcfPrevValue = 0xFFFF;
 
 // branchement Carte SD
 #define SD_CS 5
@@ -120,6 +122,21 @@ const unsigned long balanceDebounceMs = 200;
 typedef enum { BTN_EVT_INC = 1, BTN_EVT_DEC = 2, BTN_EVT_PLAY_PAUSE = 3, BTN_EVT_PCF_INT = 4 } ButtonEvent;
 static QueueHandle_t buttonQueue = NULL;
 static TaskHandle_t buttonTaskHandle = NULL;
+// Queue to request track playback from PCF events (handled in main loop)
+static QueueHandle_t pcfPlayQueue = NULL;
+
+static void playTrackIndex(uint8_t trackIndex)
+{
+    if (files_list.size() > trackIndex)
+    {
+        Serial.printf("[PCF8575] Playing track %u: %s\n", trackIndex, files_list[trackIndex].c_str());
+        audio.connecttoFS(SD, files_list[trackIndex].c_str());
+    }
+    else
+    {
+        Serial.printf("[PCF8575] Track %u out of range (files: %u)\n", trackIndex, (unsigned)files_list.size());
+    }
+}
 
 void IRAM_ATTR isrBtnInc()
 {
@@ -211,6 +228,26 @@ void buttonTask(void *param)
                     if (PCF.read(pin)) pcfValue |= (1u << pin);
                 }
                 Serial.printf("[PCF8575 INT] value=0x%04X\n", pcfValue);
+
+                // Detect falling edges (HIGH -> LOW), PCF INT is active low
+                uint16_t falling = (~pcfValue) & pcfPrevValue;
+                if (falling)
+                {
+                    // Play the first matching pin index (lowest index wins)
+                    for (uint8_t pin = 0; pin < 16; ++pin)
+                    {
+                        if (falling & (1u << pin))
+                        {
+                            if (pcfPlayQueue)
+                            {
+                                uint8_t idx = pin;
+                                xQueueSend(pcfPlayQueue, &idx, 0);
+                            }
+                            break;
+                        }
+                    }
+                }
+                pcfPrevValue = pcfValue;
             }
         }
     }
@@ -631,7 +668,8 @@ void setup()
     pinMode(BTN_PLAY_PAUSE, INPUT_PULLUP);
     // Setup FreeRTOS queue and task for button events
     buttonQueue = xQueueCreate(8, sizeof(ButtonEvent));
-    xTaskCreatePinnedToCore(buttonTask, "buttonTask", 2048, NULL, 2, &buttonTaskHandle, 1);
+    // Increase stack to withstand queue ops and PCF ISR handling
+    xTaskCreatePinnedToCore(buttonTask, "buttonTask", 4096, NULL, 2, &buttonTaskHandle, 1);
     // Attach interrupts on falling edge (active low buttons)
     attachInterrupt(digitalPinToInterrupt(BTN_INC_BAL), isrBtnInc, FALLING);
     attachInterrupt(digitalPinToInterrupt(BTN_DEC_BAL), isrBtnDec, FALLING);
@@ -662,7 +700,17 @@ void setup()
       Serial.println("=> connected!!");
       // Configure all lines as inputs and read their initial states
       pcfConfigureAllOutputs();
+      // Prime previous value with current readout to avoid false edges
+      uint16_t initValue = 0;
+      for (uint8_t pin = 0; pin < 16; ++pin)
+      {
+          if (PCF.read(pin)) initValue |= (1u << pin);
+      }
+      pcfPrevValue = initValue;
     }
+
+    // Queue for deferred audio playback from PCF events
+    pcfPlayQueue = xQueueCreate(8, sizeof(uint8_t));
 
     if (!SD.begin(SD_CS))
     {
@@ -806,6 +854,12 @@ void loop()
     test++;
     test = test == 1000 ? 0 : test;
     // Button handling moved to ISR + FreeRTOS task
+    // Handle deferred playback requests from PCF task
+    uint8_t playIdx;
+    while (pcfPlayQueue && xQueueReceive(pcfPlayQueue, &playIdx, 0) == pdTRUE)
+    {
+        playTrackIndex(playIdx);
+    }
     int packetSize = udp.parsePacket();
     if (packetSize)
     {
