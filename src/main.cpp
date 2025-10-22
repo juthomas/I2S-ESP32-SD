@@ -68,6 +68,10 @@ static uint16_t pcfPrevValue = 0xFFFF;
 
 #define PCF_PULL_STATE LOW
 
+// LEDs to blink
+#define LED_IO12 12
+#define LED_IO4 4
+
 
 String ssid = "punkhazard";
 String password = "00000000";
@@ -666,6 +670,10 @@ void setup()
     pinMode(BTN_INC_BAL, INPUT_PULLUP);
     pinMode(BTN_DEC_BAL, INPUT_PULLUP);
     pinMode(BTN_PLAY_PAUSE, INPUT_PULLUP);
+    pinMode(LED_IO12, OUTPUT);
+    pinMode(LED_IO4, OUTPUT);
+    digitalWrite(LED_IO12, LOW);
+    digitalWrite(LED_IO4, LOW);
     // Setup FreeRTOS queue and task for button events
     buttonQueue = xQueueCreate(8, sizeof(ButtonEvent));
     // Increase stack to withstand queue ops and PCF ISR handling
@@ -848,6 +856,17 @@ void loop()
 {
     audio.loop();
     dnsServer.processNextRequest();
+    // Blink LEDs on IO12 and IO4 (toggle every 500 ms)
+    static uint32_t lastBlinkMs = 0;
+    static bool blinkState = false;
+    uint32_t nowMs = millis();
+    if (nowMs - lastBlinkMs >= 100)
+    {
+        lastBlinkMs = nowMs;
+        blinkState = !blinkState;
+        digitalWrite(LED_IO12, blinkState ? LOW : HIGH);
+        digitalWrite(LED_IO4, blinkState ? HIGH : LOW);
+    }
     // PCF8575 interrupt processing moved to FreeRTOS task (pcfIntTask)
     static int32_t test = 0;
     digitalWrite(2, test < 500 ? 0 : 1);
