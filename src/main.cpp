@@ -41,8 +41,10 @@
 #include "SD.h"
 #include "FS.h"
 #include "sstream"
+#include <Adafruit_NeoPixel.h>
 
 #include "PCF8575.h"
+#include "esp32-hal-adc.h"
 
 //  adjust addresses if needed
 PCF8575 PCF(0x20);
@@ -68,10 +70,12 @@ static uint16_t pcfPrevValue = 0xFFFF;
 
 #define PCF_PULL_STATE LOW
 
-// LEDs to blink
-#define LED_IO12 12
+#define CHRG_STATUS 12
 #define LED_IO4 4
 
+#define USB_VOLTAGE_PIN 32
+//Not working on Rev1
+#define BATTERY_VOLTAGE_PIN 34 // use ADC1 pin to avoid Wi-Fi blocking ADC2
 
 String ssid = "punkhazard";
 String password = "00000000";
@@ -115,6 +119,42 @@ Audio audio;
 WiFiUDP udp;
 AsyncWebServer server(80);
 DNSServer dnsServer;
+// NeoPixel (WS2812) on IO4, 4 LEDs
+static const uint8_t NEO_PIN = LED_IO4;
+static const uint16_t NEO_COUNT = 4;
+static Adafruit_NeoPixel strip(NEO_COUNT, NEO_PIN, NEO_GRB + NEO_KHZ800);
+static uint16_t rainbowOffset = 0;
+static uint32_t lastRainbowMs = 0;
+
+static uint32_t colorWheel(uint8_t pos)
+{
+    pos = 255 - pos;
+    if (pos < 85)
+    {
+        return strip.Color(255 - pos * 3, 0, pos * 3);
+    }
+    if (pos < 170)
+    {
+        pos -= 85;
+        return strip.Color(0, pos * 3, 255 - pos * 3);
+    }
+    pos -= 170;
+    return strip.Color(pos * 3, 255 - pos * 3, 0);
+}
+
+static void updateRainbow(uint32_t nowMs)
+{
+    const uint32_t intervalMs = 5; // ~50 FPS
+    if (nowMs - lastRainbowMs < intervalMs) return;
+    lastRainbowMs = nowMs;
+    for (uint16_t i = 0; i < NEO_COUNT; ++i)
+    {
+        uint8_t wheelPos = (uint8_t)(((i * 64) / NEO_COUNT + rainbowOffset) & 0xFF);
+        strip.setPixelColor(i, colorWheel(wheelPos));
+    }
+    strip.show();
+    rainbowOffset++;
+}
 // Balance control state
 int8_t currentBalance = 0;               // valid range: -16 (left) .. +16 (right)
 bool prevBtnIncPressed = true;           // using INPUT_PULLUP, idle is HIGH
@@ -128,6 +168,13 @@ static QueueHandle_t buttonQueue = NULL;
 static TaskHandle_t buttonTaskHandle = NULL;
 // Queue to request track playback from PCF events (handled in main loop)
 static QueueHandle_t pcfPlayQueue = NULL;
+
+float usbVoltage = 0;
+float batteryVoltage = 0;
+// Adjust these to your resistor divider ratios: Vreal = Vadcpin * GAIN
+// Example: two equal resistors -> GAIN = 2.0f
+static const float USB_DIVIDER_GAIN = 2.0f;
+static const float BATTERY_DIVIDER_GAIN = 2.0f;
 
 static void playTrackIndex(uint8_t trackIndex)
 {
@@ -658,22 +705,27 @@ void scanI2CBus()
 
 void setup()
 {
-    ledcSetup(0, 12000, 16);
-    ledcSetup(1, 12000, 16);
-    // Assigne le canal PWM au pins
-    ledcAttachPin(13, 0);
-
     pinMode(SD_CS, OUTPUT);
-    pinMode(2, OUTPUT); ///
     pinMode(I2S_ENABLE, OUTPUT);
     digitalWrite(I2S_ENABLE, 1);
     pinMode(BTN_INC_BAL, INPUT_PULLUP);
     pinMode(BTN_DEC_BAL, INPUT_PULLUP);
     pinMode(BTN_PLAY_PAUSE, INPUT_PULLUP);
-    pinMode(LED_IO12, OUTPUT);
+    pinMode(CHRG_STATUS, INPUT);
     pinMode(LED_IO4, OUTPUT);
-    digitalWrite(LED_IO12, LOW);
+    pinMode(USB_VOLTAGE_PIN, INPUT);
+    pinMode(BATTERY_VOLTAGE_PIN, INPUT);
     digitalWrite(LED_IO4, LOW);
+
+    // Initialize NeoPixel strip
+    strip.begin();
+    strip.setBrightness(10);
+    strip.show();
+
+  // Configure ADC width and per-pin attenuation (11 dB ~ up to ~3.3 V)
+  analogSetWidth(12);
+  analogSetPinAttenuation(USB_VOLTAGE_PIN, ADC_11db);
+  analogSetPinAttenuation(BATTERY_VOLTAGE_PIN, ADC_11db);
     // Setup FreeRTOS queue and task for button events
     buttonQueue = xQueueCreate(8, sizeof(ButtonEvent));
     // Increase stack to withstand queue ops and PCF ISR handling
@@ -685,7 +737,6 @@ void setup()
     // PCF8575 interrupt line on GPIO15
     pinMode(PCF_INT_PIN, INPUT_PULLUP);
     attachInterrupt(digitalPinToInterrupt(PCF_INT_PIN), isrPCFInt, FALLING);
-    digitalWrite(2, 1); ///
     digitalWrite(SD_CS, HIGH);
     SPI.begin(SPI_SCK, SPI_MISO, SPI_MOSI);
     Serial.begin(115200);
@@ -856,22 +907,46 @@ void loop()
 {
     audio.loop();
     dnsServer.processNextRequest();
+    // Prefer calibrated millivolts API for better accuracy on ESP32
+    uint32_t usbMv = analogReadMilliVolts(USB_VOLTAGE_PIN);
+    usbVoltage = (usbMv / 1000.0f) * USB_DIVIDER_GAIN;
+    uint32_t batMv = analogReadMilliVolts(BATTERY_VOLTAGE_PIN);
+    // Note: ADC2 (GPIO13) reads 0 when WiFi is active; move battery sense to an ADC1 pin
+    static bool warnedAdc2 = false;
+    if (batMv == 0 && !warnedAdc2)
+    {
+        Serial.println("[Battery] ADC2 pin may be blocked by WiFi. Use an ADC1 pin (e.g., 32-35/36-39).");
+        warnedAdc2 = true;
+    }
+    if (batMv > 0)
+    {
+        batteryVoltage = (batMv / 1000.0f) * BATTERY_DIVIDER_GAIN;
+    }
     // Blink LEDs on IO12 and IO4 (toggle every 500 ms)
     static uint32_t lastBlinkMs = 0;
     static bool blinkState = false;
     uint32_t nowMs = millis();
-    if (nowMs - lastBlinkMs >= 100)
+    if (nowMs - lastBlinkMs >= 1000)
     {
+        Serial.printf("USB Voltage: %f V, Battery Voltage: %f V\n", usbVoltage, batteryVoltage);
         lastBlinkMs = nowMs;
         blinkState = !blinkState;
-        digitalWrite(LED_IO12, blinkState ? LOW : HIGH);
-        digitalWrite(LED_IO4, blinkState ? HIGH : LOW);
+        uint8_t chrgStatus = digitalRead(CHRG_STATUS);
+        // If charge status is 1, then the battery is charging
+        Serial.printf("CHRG Status: %d\n", chrgStatus);
+        // digitalWrite(CHRG_STATUS, blinkState ? LOW : HIGH);
+        if (usbVoltage > 4.0 && chrgStatus == 1)
+        {
+            strip.setBrightness(blinkState ? 4 : 10);
+        }
+        else
+        {
+            strip.setBrightness(10);
+        }
     }
+    // Drive NeoPixel rainbow animation
+    updateRainbow(nowMs);
     // PCF8575 interrupt processing moved to FreeRTOS task (pcfIntTask)
-    static int32_t test = 0;
-    digitalWrite(2, test < 500 ? 0 : 1);
-    test++;
-    test = test == 1000 ? 0 : test;
     // Button handling moved to ISR + FreeRTOS task
     // Handle deferred playback requests from PCF task
     uint8_t playIdx;
@@ -977,17 +1052,17 @@ void loop()
         }
         else if (data[0].c_str()[0] == 'I')
         {
-            // Set GPIO to value
-            if (data[1].toInt() == 13)
-            {
-                ledcWrite(0, data[2].toInt());
-                Serial.printf("GPIO 13 set to :%d\n", data[2].toInt());
-            }
-            else if (data[1].toInt() == 16)
-            {
-                // IO16 is used as a button input; ignore PWM writes
-                Serial.printf("GPIO 16 is reserved for button input, ignoring write\n");
-            }
+            // // Set GPIO to value
+            // if (data[1].toInt() == 13)
+            // {
+            //     ledcWrite(0, data[2].toInt());
+            //     Serial.printf("GPIO 13 set to :%d\n", data[2].toInt());
+            // }
+            // else if (data[1].toInt() == 16)
+            // {
+            //     // IO16 is used as a button input; ignore PWM writes
+            //     Serial.printf("GPIO 16 is reserved for button input, ignoring write\n");
+            // }
         }
         else
         {
