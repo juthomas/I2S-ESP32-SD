@@ -117,6 +117,8 @@ AsyncWebServer server(80);
 DNSServer dnsServer;
 // Balance control state
 int8_t currentBalance = 0;               // valid range: -16 (left) .. +16 (right)
+// Persistent current track index
+uint16_t currentTrackIndex = 0;
 bool prevBtnIncPressed = true;           // using INPUT_PULLUP, idle is HIGH
 bool prevBtnDecPressed = true;           // using INPUT_PULLUP, idle is HIGH
 unsigned long lastBalanceButtonMs = 0;   // debounce timer
@@ -129,12 +131,40 @@ static TaskHandle_t buttonTaskHandle = NULL;
 // Queue to request track playback from PCF events (handled in main loop)
 static QueueHandle_t pcfPlayQueue = NULL;
 
+// Button long/short press handling
+static const uint32_t BUTTON_DEBOUNCE_MS = 120;
+static const uint32_t LONG_PRESS_MS = 600;
+static const uint32_t REPEAT_FIRST_DELAY_MS = 450;
+static const uint32_t REPEAT_RATE_MS = 90;
+static const uint8_t VOLUME_STEP = 5;
+typedef struct
+{
+    const uint8_t pin;
+    bool isPressed;           // we saw a falling edge and consider it pressed
+    bool longFired;           // we already acted on long press
+    uint32_t pressStartMs;    // when the press started
+    uint32_t nextRepeatMs;    // next time to auto-repeat (inc/dec)
+} ButtonState;
+static ButtonState btnIncState = { BTN_INC_BAL, false, false, 0, 0 };
+static ButtonState btnDecState = { BTN_DEC_BAL, false, false, 0, 0 };
+static ButtonState btnPlayPauseState = { BTN_PLAY_PAUSE, false, false, 0, 0 };
+
+void update_spiffs(void);
+
+
 static void playTrackIndex(uint8_t trackIndex)
 {
     if (files_list.size() > trackIndex)
     {
         Serial.printf("[PCF8575] Playing track %u: %s\n", trackIndex, files_list[trackIndex].c_str());
         audio.connecttoFS(SD, files_list[trackIndex].c_str());
+        currentTrackIndex = trackIndex;
+        if (loop_file)
+        {
+            audio.setFileLoop(true);
+        }
+        // Persist the current track for power cycles
+        update_spiffs();
     }
     else
     {
@@ -195,32 +225,48 @@ void buttonTask(void *param)
 {
     ButtonEvent evt;
     TickType_t lastChange = 0;
-    const TickType_t debounceTicks = pdMS_TO_TICKS(120);
+    const TickType_t debounceTicks = pdMS_TO_TICKS(BUTTON_DEBOUNCE_MS);
     for (;;)
     {
-        if (xQueueReceive(buttonQueue, &evt, portMAX_DELAY) == pdTRUE)
+        bool got = xQueueReceive(buttonQueue, &evt, pdMS_TO_TICKS(20)) == pdTRUE;
+        if (got)
         {
             TickType_t now = xTaskGetTickCount();
             if (evt != BTN_EVT_PCF_INT && (now - lastChange < debounceTicks))
                 continue;
             lastChange = now;
 
-            if (evt == BTN_EVT_INC && currentBalance < 16)
+            if (evt == BTN_EVT_INC)
             {
-                currentBalance++;
-                audio.setBalance(currentBalance);
-                Serial.printf("[BTN IO14] Balance: %d\n", currentBalance);
+                // Press start for INC
+                if (!btnIncState.isPressed && digitalRead(btnIncState.pin) == LOW)
+                {
+                    btnIncState.isPressed = true;
+                    btnIncState.longFired = false;
+                    btnIncState.pressStartMs = millis();
+                    btnIncState.nextRepeatMs = btnIncState.pressStartMs + REPEAT_FIRST_DELAY_MS;
+                }
             }
-            else if (evt == BTN_EVT_DEC && currentBalance > -16)
+            else if (evt == BTN_EVT_DEC)
             {
-                currentBalance--;
-                audio.setBalance(currentBalance);
-                Serial.printf("[BTN IO16] Balance: %d\n", currentBalance);
+                // Press start for DEC
+                if (!btnDecState.isPressed && digitalRead(btnDecState.pin) == LOW)
+                {
+                    btnDecState.isPressed = true;
+                    btnDecState.longFired = false;
+                    btnDecState.pressStartMs = millis();
+                    btnDecState.nextRepeatMs = btnDecState.pressStartMs + REPEAT_FIRST_DELAY_MS;
+                }
             }
             else if (evt == BTN_EVT_PLAY_PAUSE)
             {
-                audio.pauseResume();
-                Serial.printf("[BTN IO33] %s\n", audio.isRunning() ? "Resumed" : "Paused");
+                // Press start for PLAY/PAUSE
+                if (!btnPlayPauseState.isPressed && digitalRead(btnPlayPauseState.pin) == LOW)
+                {
+                    btnPlayPauseState.isPressed = true;
+                    btnPlayPauseState.longFired = false;
+                    btnPlayPauseState.pressStartMs = millis();
+                }
             }
             else if (evt == BTN_EVT_PCF_INT)
             {
@@ -237,21 +283,124 @@ void buttonTask(void *param)
                 uint16_t falling = (~pcfValue) & pcfPrevValue;
                 if (falling)
                 {
-                    // Play the first matching pin index (lowest index wins)
-                    for (uint8_t pin = 0; pin < 16; ++pin)
+                    // On any button press on the IO expander, play the current track
+                    if (pcfPlayQueue)
                     {
-                        if (falling & (1u << pin))
+                        uint8_t idx = 0;
+                        if (!files_list.empty())
                         {
-                            if (pcfPlayQueue)
-                            {
-                                uint8_t idx = pin;
-                                xQueueSend(pcfPlayQueue, &idx, 0);
-                            }
-                            break;
+                            idx = (currentTrackIndex < files_list.size()) ? (uint8_t)currentTrackIndex : 0;
                         }
+                        xQueueSend(pcfPlayQueue, &idx, 0);
                     }
                 }
                 pcfPrevValue = pcfValue;
+            }
+        }
+        // Polling section to classify long/short and handle auto-repeat
+        uint32_t nowMs = millis();
+        // INC button
+        if (btnIncState.isPressed)
+        {
+            if (digitalRead(btnIncState.pin) == LOW)
+            {
+                if (!btnIncState.longFired && (nowMs - btnIncState.pressStartMs >= LONG_PRESS_MS))
+                {
+                    // Long press action: next track (single action)
+                    if (!files_list.empty())
+                    {
+                        uint8_t next = files_list.size() > 0 ? (uint8_t)((currentTrackIndex + 1) % files_list.size()) : 0;
+                        playTrackIndex(next);
+                        Serial.printf("[BTN IO14] Next track -> %u (long press)\n", next);
+                    }
+                    btnIncState.longFired = true;
+                }
+            }
+            else
+            {
+                // Released
+                if (!btnIncState.longFired)
+                {
+                    int newVol = volume + VOLUME_STEP;
+                    if (newVol > 255) newVol = 255;
+                    if ((uint8_t)newVol != volume)
+                    {
+                        volume = (uint8_t)newVol;
+                        audio.setVolume(volume);
+                        update_spiffs();
+                    }
+                    Serial.printf("[BTN IO14] Volume: %u (short)\n", (unsigned)volume);
+                }
+                btnIncState.isPressed = false;
+            }
+        }
+        // DEC button
+        if (btnDecState.isPressed)
+        {
+            if (digitalRead(btnDecState.pin) == LOW)
+            {
+                if (!btnDecState.longFired && (nowMs - btnDecState.pressStartMs >= LONG_PRESS_MS))
+                {
+                    // Long press action: previous track (single action)
+                    if (!files_list.empty())
+                    {
+                        uint8_t size = (uint8_t)files_list.size();
+                        uint8_t prev = size > 0 ? (uint8_t)((currentTrackIndex + size - 1) % size) : 0;
+                        playTrackIndex(prev);
+                        Serial.printf("[BTN IO16] Previous track -> %u (long press)\n", prev);
+                    }
+                    btnDecState.longFired = true;
+                }
+            }
+            else
+            {
+                // Released
+                if (!btnDecState.longFired)
+                {
+                    int newVol = (int)volume - (int)VOLUME_STEP;
+                    if (newVol < 0) newVol = 0;
+                    if ((uint8_t)newVol != volume)
+                    {
+                        volume = (uint8_t)newVol;
+                        audio.setVolume(volume);
+                        update_spiffs();
+                    }
+                    Serial.printf("[BTN IO16] Volume: %u (short)\n", (unsigned)volume);
+                }
+                btnDecState.isPressed = false;
+            }
+        }
+        // PLAY/PAUSE button
+        if (btnPlayPauseState.isPressed)
+        {
+            if (digitalRead(btnPlayPauseState.pin) == LOW)
+            {
+                if (!btnPlayPauseState.longFired && (nowMs - btnPlayPauseState.pressStartMs >= LONG_PRESS_MS))
+                {
+                    // Long press action: start playing current track
+                    if (!files_list.empty())
+                    {
+                        uint8_t idx = (files_list.size() > 0 && currentTrackIndex < files_list.size()) ? (uint8_t)currentTrackIndex : 0;
+                        playTrackIndex(idx);
+                        Serial.printf("[BTN IO33] Play track -> %u (long press)\n", idx);
+                    }
+                    else
+                    {
+                        Serial.println("[BTN IO33] No tracks to play (long)");
+                    }
+                    btnPlayPauseState.longFired = true;
+                }
+            }
+            else
+            {
+                // Released
+                if (!btnPlayPauseState.longFired)
+                {
+                    // Short press action: toggle pause/resume
+                    audio.pauseResume();
+                    Serial.printf("[BTN IO33] %s (short)\n", audio.isRunning() ? "Resumed" : "Paused");
+                }
+                btnPlayPauseState.isPressed = false;
             }
         }
     }
@@ -291,6 +440,7 @@ String local_vars_to_json()
 
     doc["loop_file"] = loop_file;
     doc["auto_play"] = auto_play;
+    doc["current_track"] = currentTrackIndex;
     doc["note"] = note;
     doc["udp_port"] = localPort;
     doc["volume"] = volume;
@@ -334,6 +484,8 @@ void json_to_local_vars(uint8_t *data)
     }
     if (doc.containsKey("auto_play"))
         auto_play = doc["auto_play"].as<const bool>();
+    if (doc.containsKey("current_track"))
+        currentTrackIndex = doc["current_track"].as<unsigned int>();
     if (doc.containsKey("note"))
         note = doc["note"].as<String>();
     if (doc.containsKey("udp_port"))
@@ -390,6 +542,7 @@ void load_spiffs()
 
     Serial.printf("SPIFFS loop_file : %s\n", loop_file ? "true" : "false");
     Serial.printf("SPIFFS auto_play : %s\n", auto_play ? "true" : "false");
+    Serial.printf("SPIFFS current_track : %u\n", currentTrackIndex);
     Serial.printf("SPIFFS note : %s\n", note.c_str());
     Serial.printf("SPIFFS udp_port : %d\n", localPort);
     Serial.printf("SPIFFS volume : %d\n", volume);
@@ -557,6 +710,9 @@ void handlePlay(AsyncWebServerRequest *request, uint8_t *data, size_t len, size_
     {
         audio.setFileLoop(true);
     }
+    // Persist selected track
+    currentTrackIndex = file_index;
+    update_spiffs();
     request->send(200);
 }
 void handleRequest(AsyncWebServerRequest *request)
@@ -802,7 +958,8 @@ void setup()
     // printf("test : %s\n", files_list[1].c_str());
     if (auto_play)
     {
-        audio.connecttoFS(SD, files_list[0].c_str());
+        uint16_t idx = (files_list.size() > 0 && currentTrackIndex < files_list.size()) ? currentTrackIndex : 0;
+        playTrackIndex(idx);
     }
     if (loop_file)
     {
@@ -998,6 +1155,8 @@ void loop()
             {
                 printf("Playing : %s\n", files_list[audio_to_play].c_str());
                 audio.connecttoFS(SD, files_list[audio_to_play].c_str());
+                currentTrackIndex = audio_to_play;
+                update_spiffs();
             }
             else
             {
