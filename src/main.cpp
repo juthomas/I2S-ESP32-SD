@@ -70,7 +70,7 @@ static uint16_t pcfPrevValue = 0xFFFF;
 
 #define PCF_PULL_STATE LOW
 
-#define CHRG_STATUS 12
+#define CHRG_STATUS 13
 #define LED_IO4 4
 
 #define USB_VOLTAGE_PIN 32
