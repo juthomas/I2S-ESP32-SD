@@ -66,7 +66,7 @@ static uint16_t pcfPrevValue = 0xFFFF;
 #define BTN_PLAY_PAUSE 33 // toggle play/pause
 #define PCF_INT_PIN 15
 
-#define PCF_PULL_STATE LOW
+#define PCF_PULL_STATE HIGH
 
 // LEDs to blink
 #define LED_IO12 12
