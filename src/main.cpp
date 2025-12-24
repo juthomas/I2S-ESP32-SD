@@ -43,8 +43,12 @@
 #include "sstream"
 #include <Adafruit_NeoPixel.h>
 
+#include "BluetoothA2DPSink.h"
 #include "PCF8575.h"
 #include "esp32-hal-adc.h"
+#include "esp_sleep.h"
+#include "driver/rtc_io.h"
+#include "driver/i2s.h"
 
 //  adjust addresses if needed
 PCF8575 PCF(0x20);
@@ -116,6 +120,7 @@ uint8_t volume;
 std::vector<t_music_data> music_data;
 std::vector<String> files_list;
 Audio audio;
+BluetoothA2DPSink a2dp;
 WiFiUDP udp;
 AsyncWebServer server(80);
 DNSServer dnsServer;
@@ -157,6 +162,7 @@ static void updateRainbow(uint32_t nowMs)
 }
 // Balance control state
 int8_t currentBalance = 0;               // valid range: -16 (left) .. +16 (right)
+bool bt_mode = true;                     // Bluetooth speaker mode (BT-only firmware)
 bool prevBtnIncPressed = true;           // using INPUT_PULLUP, idle is HIGH
 bool prevBtnDecPressed = true;           // using INPUT_PULLUP, idle is HIGH
 unsigned long lastBalanceButtonMs = 0;   // debounce timer
@@ -176,8 +182,287 @@ float batteryVoltage = 0;
 static const float USB_DIVIDER_GAIN = 2.0f;
 static const float BATTERY_DIVIDER_GAIN = 2.0f;
 
+// Forward declaration for persistence helper
+void update_spiffs();
+
+// =========================
+// BT-only: Button handling
+// =========================
+#define DEBUG_BT false
+// Buttons IO Attribution (BT control)
+#define START_BUTTON GPIO_NUM_33
+#define DOWN_BUTTON 22
+#define UP_BUTTON 23
+
+volatile bool is_playing = false;
+// Volume modifier (0-14)
+int16_t current_volume = 14;
+// Buttons Requests/tasks
+TaskHandle_t StartPressTaskHandle = NULL;
+TaskHandle_t StartPressShortTaskHandle = NULL;
+TaskHandle_t DownPressTaskHandle = NULL;
+TaskHandle_t DownPressShortTaskHandle = NULL;
+TaskHandle_t UpPressTaskHandle = NULL;
+TaskHandle_t UpPressShortTaskHandle = NULL;
+// Buttons press timing
+volatile bool isStartPressed = false;
+volatile uint32_t startPressedTime = 0;
+volatile bool isDownPressed = false;
+volatile uint32_t downPressedTime = 0;
+volatile bool isUpPressed = false;
+volatile uint32_t upPressedTime = 0;
+
+// Optional prompt sounds (define to enable)
+// #define INCLUDE_PROMPTS 0
+#ifdef INCLUDE_PROMPTS
+extern const uint8_t PROGMEM bike_groove_on_wav[];
+extern const uint32_t bike_groove_on_wav_len;
+extern const uint8_t PROGMEM bike_groove_off_wav[];
+extern const uint32_t bike_groove_off_wav_len;
+extern const uint8_t PROGMEM bluetooth_connected_wav[];
+extern const uint32_t bluetooth_connected_wav_len;
+extern const uint8_t PROGMEM bluetooth_disconnected_wav[];
+extern const uint32_t bluetooth_disconnected_wav_len;
+static const uint32_t chunkSize = 60000;
+static uint8_t audio_ble_wav_ram[chunkSize];
+static void readSound(const uint8_t PROGMEM sound[], uint32_t sound_len)
+{
+    unsigned int totalLength = sound_len;
+    unsigned int offset = 0;
+    while (totalLength > 0)
+    {
+        unsigned int currentChunkSize = min(chunkSize, totalLength);
+        for (unsigned int i = 0; i < currentChunkSize; i++)
+        {
+            audio_ble_wav_ram[i] = pgm_read_byte(&sound[offset + i]);
+        }
+        a2dp.audio_data_callback((uint8_t *)audio_ble_wav_ram, currentChunkSize);
+        offset += currentChunkSize;
+        totalLength -= currentChunkSize;
+    }
+}
+#endif
+
+static void onBluetoothConnect2(esp_a2d_connection_state_t state, void *)
+{
+#ifdef INCLUDE_PROMPTS
+    if (state == ESP_A2D_CONNECTION_STATE_CONNECTED)
+    {
+        if (DEBUG_BT) Serial.println("Bluetooth connected");
+        readSound(bluetooth_connected_wav, bluetooth_connected_wav_len);
+    }
+    if (state == ESP_A2D_CONNECTION_STATE_DISCONNECTED)
+    {
+        if (DEBUG_BT) Serial.println("Bluetooth disconnected");
+        readSound(bluetooth_disconnected_wav, bluetooth_disconnected_wav_len);
+    }
+#else
+    (void)state;
+#endif
+}
+
+static void callbackaudio(esp_a2d_audio_state_t state, void* /*param*/)
+{
+    if (DEBUG_BT)
+    {
+        Serial.printf("Callback state:%d\n", state);
+    }
+    is_playing = (state == ESP_A2D_AUDIO_STATE_STARTED);
+}
+
+static void StartPressTask(void *parameter)
+{
+    if (DEBUG_BT) Serial.println("Start Button Long Press Detected (Task)");
+    vTaskDelay(2000 / portTICK_PERIOD_MS);
+#ifdef INCLUDE_PROMPTS
+    readSound(bike_groove_off_wav, bike_groove_off_wav_len);
+    vTaskDelay(1000 / portTICK_PERIOD_MS);
+#endif
+    digitalWrite(I2S_ENABLE, LOW);
+    // Turn off NeoPixel LEDs
+    strip.clear();
+    strip.setBrightness(0);
+    strip.show();
+    // Wait for button release to avoid immediate wake from EXT0 (active-low)
+    while (digitalRead((int)START_BUTTON) == LOW)
+    {
+        vTaskDelay(10 / portTICK_PERIOD_MS);
+    }
+    vTaskDelay(50 / portTICK_PERIOD_MS);
+    esp_deep_sleep_start();
+    StartPressTaskHandle = NULL;
+    vTaskDelete(NULL);
+}
+
+static void StartPressShortTask(void *parameter)
+{
+    if (DEBUG_BT)
+    {
+        Serial.printf("Start/Stop\n");
+    }
+    if (is_playing)
+    {
+        a2dp.stop();
+        is_playing = false;
+    }
+    else
+    {
+        a2dp.play();
+        is_playing = true;
+    }
+    vTaskDelete(NULL);
+}
+
+void IRAM_ATTR StartPress()
+{
+    if (digitalRead((int)START_BUTTON) == LOW)
+    {
+        isStartPressed = true;
+        startPressedTime = millis();
+        if (StartPressTaskHandle == NULL)
+        {
+            xTaskCreate(StartPressTask, "StartPressTask", 2048, NULL, 1, &StartPressTaskHandle);
+        }
+    }
+    else if (isStartPressed == true)
+    {
+        isStartPressed = false;
+        if (millis() - startPressedTime < 2000)
+        {
+            if (StartPressTaskHandle != NULL)
+            {
+                vTaskDelete(StartPressTaskHandle);
+                StartPressTaskHandle = NULL;
+            }
+            xTaskCreate(StartPressShortTask, "StartPressShortTask", 2048, NULL, 1, &StartPressShortTaskHandle);
+        }
+    }
+}
+
+static void DownPressTask(void *parameter)
+{
+    if (DEBUG_BT) Serial.println("Down Button Long Press (Task)");
+    vTaskDelay(1000 / portTICK_PERIOD_MS);
+    a2dp.previous();
+    DownPressTaskHandle = NULL;
+    vTaskDelete(NULL);
+}
+
+static void DownPressShortTask(void *parameter)
+{
+    int tmp_current_volume = (a2dp.get_volume() - 15) / 8;
+    tmp_current_volume = tmp_current_volume > 0 ? tmp_current_volume - 1 : tmp_current_volume;
+    a2dp.set_volume(tmp_current_volume * 8 + 15);
+    vTaskDelete(NULL);
+}
+
+void IRAM_ATTR DownPress()
+{
+    if (digitalRead(DOWN_BUTTON) == LOW)
+    {
+        isDownPressed = true;
+        downPressedTime = millis();
+        if (DownPressTaskHandle == NULL)
+        {
+            xTaskCreate(DownPressTask, "DownPressTask", 2048, NULL, 1, &DownPressTaskHandle);
+        }
+    }
+    else
+    {
+        isDownPressed = false;
+        if (millis() - downPressedTime < 1000)
+        {
+            if (DownPressTaskHandle != NULL)
+            {
+                vTaskDelete(DownPressTaskHandle);
+                DownPressTaskHandle = NULL;
+            }
+            xTaskCreate(DownPressShortTask, "DownPressShortTask", 2048, NULL, 1, &DownPressShortTaskHandle);
+        }
+    }
+}
+
+static void UpPressTask(void *parameter)
+{
+    if (DEBUG_BT) Serial.println("Up Button Long Press (Task)");
+    vTaskDelay(1000 / portTICK_PERIOD_MS);
+    a2dp.next();
+    UpPressTaskHandle = NULL;
+    vTaskDelete(NULL);
+}
+
+static void UpPressShortTask(void *parameter)
+{
+    int tmp_current_volume = (a2dp.get_volume() - 15) / 8;
+    tmp_current_volume = tmp_current_volume < 14 ? tmp_current_volume + 1 : tmp_current_volume;
+    a2dp.set_volume(tmp_current_volume * 8 + 15);
+    vTaskDelete(NULL);
+}
+
+void IRAM_ATTR UpPress()
+{
+    if (digitalRead(UP_BUTTON) == LOW)
+    {
+        isUpPressed = true;
+        upPressedTime = millis();
+        if (UpPressTaskHandle == NULL)
+        {
+            xTaskCreate(UpPressTask, "UpPressTask", 2048, NULL, 1, &UpPressTaskHandle);
+        }
+    }
+    else
+    {
+        isUpPressed = false;
+        if (millis() - upPressedTime < 1000)
+        {
+            if (UpPressTaskHandle != NULL)
+            {
+                vTaskDelete(UpPressTaskHandle);
+                UpPressTaskHandle = NULL;
+            }
+            xTaskCreate(UpPressShortTask, "UpPressShortTask", 2048, NULL, 1, &UpPressShortTaskHandle);
+        }
+    }
+}
+
+static void startBtMode()
+{
+    // Stop any file playback and start A2DP sink on same I2S pins
+    audio.stopSong();
+    // Ensure no previous I2S driver is active (Audio library or others)
+    i2s_driver_uninstall(I2S_NUM_0);
+    i2s_pin_config_t pins = {
+        .bck_io_num = I2S_BCLK,
+        .ws_io_num = I2S_LRC,
+        .data_out_num = I2S_DOUT,
+        .data_in_num = I2S_PIN_NO_CHANGE
+    };
+    a2dp.set_pin_config(pins);
+    a2dp.set_on_audio_state_changed(&callbackaudio);
+    a2dp.set_on_connection_state_changed(onBluetoothConnect2);
+    a2dp.set_auto_reconnect(true);
+    a2dp.start("Enceinte Cuisine");
+    a2dp.set_volume(current_volume * 8 + 15);
+#ifdef INCLUDE_PROMPTS
+    readSound(bike_groove_on_wav, bike_groove_on_wav_len);
+#endif
+    Serial.println("[BT] A2DP sink started");
+}
+
+static void stopBtMode()
+{
+    a2dp.stop();
+    Serial.println("[BT] A2DP sink stopped");
+}
+
 static void playTrackIndex(uint8_t trackIndex)
 {
+    if (bt_mode)
+    {
+        stopBtMode();
+        bt_mode = false;
+        update_spiffs();
+    }
     if (files_list.size() > trackIndex)
     {
         Serial.printf("[PCF8575] Playing track %u: %s\n", trackIndex, files_list[trackIndex].c_str());
@@ -338,6 +623,7 @@ String local_vars_to_json()
 
     doc["loop_file"] = loop_file;
     doc["auto_play"] = auto_play;
+    doc["bt_mode"] = bt_mode;
     doc["note"] = note;
     doc["udp_port"] = localPort;
     doc["volume"] = volume;
@@ -381,6 +667,8 @@ void json_to_local_vars(uint8_t *data)
     }
     if (doc.containsKey("auto_play"))
         auto_play = doc["auto_play"].as<const bool>();
+    if (doc.containsKey("bt_mode"))
+        bt_mode = doc["bt_mode"].as<const bool>();
     if (doc.containsKey("note"))
         note = doc["note"].as<String>();
     if (doc.containsKey("udp_port"))
@@ -437,6 +725,7 @@ void load_spiffs()
 
     Serial.printf("SPIFFS loop_file : %s\n", loop_file ? "true" : "false");
     Serial.printf("SPIFFS auto_play : %s\n", auto_play ? "true" : "false");
+    Serial.printf("SPIFFS bt_mode : %s\n", bt_mode ? "true" : "false");
     Serial.printf("SPIFFS note : %s\n", note.c_str());
     Serial.printf("SPIFFS udp_port : %d\n", localPort);
     Serial.printf("SPIFFS volume : %d\n", volume);
@@ -708,9 +997,14 @@ void setup()
     pinMode(SD_CS, OUTPUT);
     pinMode(I2S_ENABLE, OUTPUT);
     digitalWrite(I2S_ENABLE, 1);
-    pinMode(BTN_INC_BAL, INPUT_PULLUP);
-    pinMode(BTN_DEC_BAL, INPUT_PULLUP);
-    pinMode(BTN_PLAY_PAUSE, INPUT_PULLUP);
+    // Configure BT control buttons
+    pinMode((int)START_BUTTON, INPUT);
+    esp_sleep_enable_ext0_wakeup(START_BUTTON, 0);
+    // Configure RTC domain pull state so EXT0 sees a stable HIGH when released
+    rtc_gpio_pulldown_dis((gpio_num_t)START_BUTTON);
+    rtc_gpio_pullup_en((gpio_num_t)START_BUTTON);
+    pinMode(DOWN_BUTTON, INPUT);
+    pinMode(UP_BUTTON, INPUT);
     pinMode(CHRG_STATUS, INPUT);
     pinMode(LED_IO4, OUTPUT);
     pinMode(USB_VOLTAGE_PIN, INPUT);
@@ -726,14 +1020,10 @@ void setup()
   analogSetWidth(12);
   analogSetPinAttenuation(USB_VOLTAGE_PIN, ADC_11db);
   analogSetPinAttenuation(BATTERY_VOLTAGE_PIN, ADC_11db);
-    // Setup FreeRTOS queue and task for button events
-    buttonQueue = xQueueCreate(8, sizeof(ButtonEvent));
-    // Increase stack to withstand queue ops and PCF ISR handling
-    xTaskCreatePinnedToCore(buttonTask, "buttonTask", 4096, NULL, 2, &buttonTaskHandle, 1);
-    // Attach interrupts on falling edge (active low buttons)
-    attachInterrupt(digitalPinToInterrupt(BTN_INC_BAL), isrBtnInc, FALLING);
-    attachInterrupt(digitalPinToInterrupt(BTN_DEC_BAL), isrBtnDec, FALLING);
-    attachInterrupt(digitalPinToInterrupt(BTN_PLAY_PAUSE), isrBtnPlayPause, FALLING);
+    // Attach BT control interrupts
+    attachInterrupt(digitalPinToInterrupt((int)START_BUTTON), StartPress, CHANGE);
+    attachInterrupt(digitalPinToInterrupt(DOWN_BUTTON), DownPress, CHANGE);
+    attachInterrupt(digitalPinToInterrupt(UP_BUTTON), UpPress, CHANGE);
     // PCF8575 interrupt line on GPIO15
     pinMode(PCF_INT_PIN, INPUT_PULLUP);
     attachInterrupt(digitalPinToInterrupt(PCF_INT_PIN), isrPCFInt, FALLING);
@@ -768,8 +1058,7 @@ void setup()
       pcfPrevValue = initValue;
     }
 
-    // Queue for deferred audio playback from PCF events
-    pcfPlayQueue = xQueueCreate(8, sizeof(uint8_t));
+    // Skip PCF queue in BT-only mode
 
     if (!SD.begin(SD_CS))
     {
@@ -790,70 +1079,72 @@ void setup()
 
     load_spiffs();
     Serial.printf("JSON : %s/n", local_vars_to_json().c_str());
-    WiFi.mode(WIFI_AP);
-    // Optional: ensure a common AP IP like 192.168.4.1
-    WiFi.softAP(ssid.c_str(), password.c_str());
-
-    // Start DNS server for captive portal: resolve all domains to AP IP
-    dnsServer.start(53, "*", WiFi.softAPIP());
-
-    Serial.print("Starting AP \"" + ssid + "\"");
-    delay(100);
-    Serial.println("... done");
-    digitalWrite(2, 0); ///
-    udp.begin(localPort);
-    if (DEBUG)
+    if (!bt_mode)
     {
-        Serial.begin(115200);
-        Serial.print("IP: ");
-        Serial.println(WiFi.softAPIP());
+        WiFi.mode(WIFI_AP);
+        // Optional: ensure a common AP IP like 192.168.4.1
+        WiFi.softAP(ssid.c_str(), password.c_str());
+
+        // Start DNS server for captive portal: resolve all domains to AP IP
+        dnsServer.start(53, "*", WiFi.softAPIP());
+
+        Serial.print("Starting AP \"" + ssid + "\"");
+        delay(100);
+        Serial.println("... done");
+        digitalWrite(2, 0); ///
+        udp.begin(localPort);
+        if (DEBUG)
+        {
+            Serial.begin(115200);
+            Serial.print("IP: ");
+            Serial.println(WiFi.softAPIP());
+        }
+        server.on("/", HTTP_ANY, [](AsyncWebServerRequest *request)
+                  { request->send(SPIFFS, "/index.html", String(), false); });
+        // Captive portal endpoints used by OS connectivity checks
+        // Android
+        server.on("/generate_204", HTTP_ANY, [](AsyncWebServerRequest *request) { request->send(200, "text/html", "<html><meta http-equiv=\"refresh\" content=\"0; url=/\"></html>"); });
+        // iOS/macOS
+        server.on("/hotspot-detect.html", HTTP_ANY, [](AsyncWebServerRequest *request) { request->send(200, "text/html", "<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>"); });
+        server.on("/success.html", HTTP_ANY, [](AsyncWebServerRequest *request) { request->send(200, "text/html", "Success"); });
+        // Windows
+        server.on("/ncsi.txt", HTTP_ANY, [](AsyncWebServerRequest *request) { request->send(200, "text/plain", "Microsoft NCSI"); });
+        server.on("/connecttest.txt", HTTP_ANY, [](AsyncWebServerRequest *request) { request->send(200, "text/plain", "" ); });
+        server.on("/library/test/success.html", HTTP_ANY, [](AsyncWebServerRequest *request) { request->send(200, "text/html", "Success"); });
+        server.on("/success.txt", HTTP_ANY, [](AsyncWebServerRequest *request) { request->send(200, "text/plain", "Success"); });
+        server.on("/data", HTTP_GET, [](AsyncWebServerRequest *request)
+                  {Serial.printf("Json demandé par le site\n");
+                  request->send(200, "application/json", local_vars_to_json()); });
+        server.on(
+            "/play", HTTP_POST, [](AsyncWebServerRequest *request) {}, NULL, handlePlay);
+        server.on(
+            "/stop", HTTP_POST, [](AsyncWebServerRequest *request) {}, NULL, handleStop);
+        server.on(
+            "/delete", HTTP_POST, [](AsyncWebServerRequest *request) {}, NULL, handleDelete);
+        server.on(
+            "/settings", HTTP_POST, [](AsyncWebServerRequest *request) {}, NULL, handleSettings);
+        server.onFileUpload(handleFileUpload);
+        // server.on("/edit", HTTP_POST, handleFileUpload2);
+
+        server.serveStatic("/index.css", SPIFFS, "/index.css");
+        server.serveStatic("/index.js", SPIFFS, "/index.js");
+        // server.serveStatic("/background.png", SPIFFS, "/background.png");
+        // server.serveStatic("/react.svg", SPIFFS, "/react.svg");
+        server.serveStatic("/vite.svg", SPIFFS, "/vite.svg");
+        server.onNotFound(handleRequest);
+
+        server.begin();
     }
-    server.on("/", HTTP_ANY, [](AsyncWebServerRequest *request)
-              { request->send(SPIFFS, "/index.html", String(), false); });
-    // Captive portal endpoints used by OS connectivity checks
-    // Android
-    server.on("/generate_204", HTTP_ANY, [](AsyncWebServerRequest *request) { request->send(200, "text/html", "<html><meta http-equiv=\"refresh\" content=\"0; url=/\"></html>"); });
-    // iOS/macOS
-    server.on("/hotspot-detect.html", HTTP_ANY, [](AsyncWebServerRequest *request) { request->send(200, "text/html", "<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>"); });
-    server.on("/success.html", HTTP_ANY, [](AsyncWebServerRequest *request) { request->send(200, "text/html", "Success"); });
-    // Windows
-    server.on("/ncsi.txt", HTTP_ANY, [](AsyncWebServerRequest *request) { request->send(200, "text/plain", "Microsoft NCSI"); });
-    server.on("/connecttest.txt", HTTP_ANY, [](AsyncWebServerRequest *request) { request->send(200, "text/plain", "" ); });
-    server.on("/library/test/success.html", HTTP_ANY, [](AsyncWebServerRequest *request) { request->send(200, "text/html", "Success"); });
-    server.on("/success.txt", HTTP_ANY, [](AsyncWebServerRequest *request) { request->send(200, "text/plain", "Success"); });
-    // server.on(
-    //     "/edit", HTTP_POST, [](AsyncWebServerRequest *request)
-    //     { request->send(200); },
-    //     handleFileUpload);
-    server.on("/data", HTTP_GET, [](AsyncWebServerRequest *request)
-              {Serial.printf("Json demandé par le site\n");
-              request->send(200, "application/json", local_vars_to_json()); });
-    server.on(
-        "/play", HTTP_POST, [](AsyncWebServerRequest *request) {}, NULL, handlePlay);
-    server.on(
-        "/stop", HTTP_POST, [](AsyncWebServerRequest *request) {}, NULL, handleStop);
-    server.on(
-        "/delete", HTTP_POST, [](AsyncWebServerRequest *request) {}, NULL, handleDelete);
-    server.on(
-        "/settings", HTTP_POST, [](AsyncWebServerRequest *request) {}, NULL, handleSettings);
-    server.onFileUpload(handleFileUpload);
-    // server.on("/edit", HTTP_POST, handleFileUpload2);
-
-    server.serveStatic("/index.css", SPIFFS, "/index.css");
-    server.serveStatic("/index.js", SPIFFS, "/index.js");
-    // server.serveStatic("/background.png", SPIFFS, "/background.png");
-    // server.serveStatic("/react.svg", SPIFFS, "/react.svg");
-    server.serveStatic("/vite.svg", SPIFFS, "/vite.svg");
-    server.onNotFound(handleRequest);
-
-    server.begin();
 
     audio.setPinout(I2S_BCLK, I2S_LRC, I2S_DOUT);
     update_music_from_sd();
     // printf("test : %s\n", files_list[1].c_str());
-    if (auto_play)
+    if (auto_play && !bt_mode)
     {
-        audio.connecttoFS(SD, files_list[0].c_str());
+        if (!files_list.empty())
+        {
+            audio.connecttoFS(SD, files_list[0].c_str());
+        }
     }
     if (loop_file)
     {
@@ -865,6 +1156,11 @@ void setup()
     // Initialize balance to center on boot
     currentBalance = 0;
     audio.setBalance(currentBalance);
+    // Start BT audio at the very end if requested
+    if (bt_mode)
+    {
+        startBtMode();
+    }
 }
 
 bool need_to_play = true;
@@ -906,7 +1202,6 @@ void splitString(String message, char separator, String data[5])
 void loop()
 {
     audio.loop();
-    dnsServer.processNextRequest();
     // Prefer calibrated millivolts API for better accuracy on ESP32
     uint32_t usbMv = analogReadMilliVolts(USB_VOLTAGE_PIN);
     usbVoltage = (usbMv / 1000.0f) * USB_DIVIDER_GAIN;
@@ -954,136 +1249,7 @@ void loop()
     {
         playTrackIndex(playIdx);
     }
-    int packetSize = udp.parsePacket();
-    if (packetSize)
-    {
-        // Read the packet into packetBuffer
-        int len = udp.read(packetBuffer, 255);
-        if (len > 0)
-        {
-            packetBuffer[len] = 0;
-        }
-        Serial.printf("Data : %s\n", packetBuffer);
-        String strData(packetBuffer);
-        String data[5]; // Store incoming data
-
-        splitString(strData, ' ', data);
-        if (data[0].c_str()[0] == 'V')
-        {
-            // Volume
-            // "V 0" to "V 255"
-            Serial.printf("Set Volume to : %d\n", data[1].toInt());
-            audio.setVolume(data[1].toInt());
-        }
-        else if (data[0].c_str()[0] == 'P')
-        {
-            // Pause / Resume
-            // "P" or "P 0" or "P 1"
-            int8_t action = -1;
-            if (data[1] != "")
-            {
-                Serial.printf("Second argument is %d\n", data[1].toInt());
-                action = data[1].toInt();
-            }
-            if ((action == 0 && audio.isRunning()) || (action == 1 && !audio.isRunning()) || action == -1)
-            {
-                audio.pauseResume();
-                Serial.printf("Music %s\n", audio.isRunning() ? "Resumed" : "Paused");
-            }
-            else
-            {
-                Serial.printf("Music allready %s\n", audio.isRunning() ? "Resumed" : "Paused");
-            }
-        }
-        else if (data[0].c_str()[0] == 'L')
-        {
-            // Loop file
-            // "L" or "L 0" or "L 1"
-            int8_t action = -1;
-            if (data[1] != "")
-            {
-                Serial.printf("Second argument is %d\n", data[1].toInt());
-                action = data[1].toInt();
-            }
-            if ((action == -1 && loop_file == false) || action == 1)
-            {
-                audio.setFileLoop(true);
-                loop_file = true;
-                Serial.printf("File loop activated\n");
-            }
-            else if ((action == -1 && loop_file == true) || action == 0)
-            {
-                audio.setFileLoop(false);
-                loop_file = false;
-                Serial.printf("File loop deactivated\n");
-            }
-            else
-            {
-                Serial.printf("File loop unchanged (%d)\n", loop_file);
-            }
-        }
-        else if (data[0].c_str()[0] == 'B')
-        {
-            // Balance
-            // "B -16" to "B 16"
-            //-16 to 16
-            audio.setBalance(data[1].toInt());
-            Serial.printf("Balance set to \n", data[1].toInt());
-        }
-        else if (data[0].c_str()[0] == 'J')
-        {
-            // Jump at position in audio file
-            //"J 500" jump in audio file to time
-            audio.setAudioPlayPosition(data[1].toInt());
-            Serial.printf("Jump in audio file to %dsecs \n", data[1].toInt());
-        }
-        // else if (data[0].c_str()[0] == 'J')
-        // {
-        //     //"J 500" jump in audio file to time
-        //     audio.setAudioPlayPosition(data[1].toInt());
-        //     Serial.printf("Jump in audio file to %dsecs \n", data[1].toInt());
-        // }
-        else if (data[0].c_str()[0] == 'T')
-        {
-            // Set Tonality (more like an equalizer)
-            //"T -40 0 6" values can be between -40 ... +6 (dB)
-            audio.setTone(data[1].toInt(), data[2].toInt(), data[3].toInt());
-            Serial.printf("Tone set to low:%d band:%d high:%d\n", data[1].toInt(), data[2].toInt(), data[3].toInt());
-        }
-        else if (data[0].c_str()[0] == 'I')
-        {
-            // // Set GPIO to value
-            // if (data[1].toInt() == 13)
-            // {
-            //     ledcWrite(0, data[2].toInt());
-            //     Serial.printf("GPIO 13 set to :%d\n", data[2].toInt());
-            // }
-            // else if (data[1].toInt() == 16)
-            // {
-            //     // IO16 is used as a button input; ignore PWM writes
-            //     Serial.printf("GPIO 16 is reserved for button input, ignoring write\n");
-            // }
-        }
-        else
-        {
-            // Play track
-            //"0" to "N" number of tracks in playlist
-            uint16_t audio_to_play = data[0].toInt();
-            if (files_list.size() > audio_to_play)
-            {
-                printf("Playing : %s\n", files_list[audio_to_play].c_str());
-                audio.connecttoFS(SD, files_list[audio_to_play].c_str());
-            }
-            else
-            {
-                printf("Sound number %d is out of range\n", audio_to_play);
-            }
-            if (loop_file)
-            {
-                audio.setFileLoop(true);
-            }
-        }
-    }
+    // UDP/WiFi stack removed in BT-only firmware
 }
 
 // optional

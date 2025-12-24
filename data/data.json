@@ -1,6 +1,7 @@
 {
   "loop_file": true,
   "auto_play": false,
+  "bt_mode": true,
   "note": "notes pour plus tard...",
   "udp_port": 8266,
   "volume": 60,
