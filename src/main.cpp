@@ -131,6 +131,15 @@ static Adafruit_NeoPixel strip(NEO_COUNT, NEO_PIN, NEO_GRB + NEO_KHZ800);
 static uint16_t rainbowOffset = 0;
 static uint32_t lastRainbowMs = 0;
 
+// Forward declarations for globals used by LED battery indicator
+extern float usbVoltage;
+extern float batteryVoltage;
+// Define globals early so they are visible to functions below in some toolchains
+float usbVoltage = 0;
+float batteryVoltage = 0;
+// Bluetooth connection state (used to show pairing rainbow when not connected)
+static bool a2dpConnected = false;
+
 static uint32_t colorWheel(uint8_t pos)
 {
     pos = 255 - pos;
@@ -160,6 +169,80 @@ static void updateRainbow(uint32_t nowMs)
     strip.show();
     rainbowOffset++;
 }
+static void updateBatteryLeds(uint32_t nowMs, float usbV, float batV, bool isCharging)
+{
+    const uint32_t updateIntervalMs = 100; // refresh at ~10 Hz
+    static uint32_t lastUpdateMs = 0;
+    if (nowMs - lastUpdateMs < updateIntervalMs) return;
+    lastUpdateMs = nowMs;
+
+    // If charger is connected and not charging anymore, show "fully charged" in blue
+    bool isUsbPresent = (usbV > 4.0f);
+    if (isUsbPresent && !isCharging)
+    {
+        const uint32_t blue = strip.Color(0, 0, 150);
+        for (uint16_t i = 0; i < NEO_COUNT; ++i)
+        {
+            strip.setPixelColor(i, blue);
+        }
+        strip.show();
+        return;
+    }
+
+    // Map measured battery voltage to percentage using simple 1S LiPo range
+    // Adjust vMin/vMax if your chemistry differs
+    float v = batV;
+    const float vMin = 3.3f;  // empty
+    const float vMax = 4.2f;  // full
+    if (v < vMin) v = vMin;
+    if (v > vMax) v = vMax;
+    float pct = (v - vMin) / (vMax - vMin); // 0..1
+    int greenCount = (int)(pct * NEO_COUNT + 0.5f); // round to nearest LED
+    if (greenCount < 0) greenCount = 0;
+    if (greenCount > (int)NEO_COUNT) greenCount = NEO_COUNT;
+
+    static bool blinkOn = false;
+    static uint32_t lastBlinkMs = 0;
+    const uint32_t blinkIntervalMs = 500;
+    if (isCharging)
+    {
+        if (nowMs - lastBlinkMs >= blinkIntervalMs)
+        {
+            lastBlinkMs = nowMs;
+            blinkOn = !blinkOn;
+        }
+    }
+    else
+    {
+        blinkOn = true; // show steady when not charging
+    }
+
+    // Colors
+    const uint32_t green = strip.Color(0, 150, 0);
+    const uint32_t red   = strip.Color(200, 0, 0);
+    const uint32_t off   = strip.Color(0, 0, 0);
+
+    for (uint16_t i = 0; i < NEO_COUNT; ++i)
+    {
+        if ((int)i < greenCount)
+        {
+            // Last lit green LED blinks when charging
+            if (isCharging && (int)i == greenCount - 1 && greenCount > 0)
+            {
+                strip.setPixelColor(i, blinkOn ? green : off);
+            }
+            else
+            {
+                strip.setPixelColor(i, green);
+            }
+        }
+        else
+        {
+            strip.setPixelColor(i, red);
+        }
+    }
+    strip.show();
+}
 // Balance control state
 int8_t currentBalance = 0;               // valid range: -16 (left) .. +16 (right)
 bool bt_mode = true;                     // Bluetooth speaker mode (BT-only firmware)
@@ -175,8 +258,6 @@ static TaskHandle_t buttonTaskHandle = NULL;
 // Queue to request track playback from PCF events (handled in main loop)
 static QueueHandle_t pcfPlayQueue = NULL;
 
-float usbVoltage = 0;
-float batteryVoltage = 0;
 // Adjust these to your resistor divider ratios: Vreal = Vadcpin * GAIN
 // Example: two equal resistors -> GAIN = 2.0f
 static const float USB_DIVIDER_GAIN = 2.0f;
@@ -211,6 +292,11 @@ volatile bool isDownPressed = false;
 volatile uint32_t downPressedTime = 0;
 volatile bool isUpPressed = false;
 volatile uint32_t upPressedTime = 0;
+// Local buttons on IO14/IO16 (map to Up/Down behavior)
+volatile bool isIncPressed = false;
+volatile uint32_t incPressedTime = 0;
+volatile bool isDecPressed = false;
+volatile uint32_t decPressedTime = 0;
 
 // Optional prompt sounds (define to enable)
 // #define INCLUDE_PROMPTS 0
@@ -248,16 +334,19 @@ static void onBluetoothConnect2(esp_a2d_connection_state_t state, void *)
 #ifdef INCLUDE_PROMPTS
     if (state == ESP_A2D_CONNECTION_STATE_CONNECTED)
     {
+        a2dpConnected = true;
         if (DEBUG_BT) Serial.println("Bluetooth connected");
         readSound(bluetooth_connected_wav, bluetooth_connected_wav_len);
     }
     if (state == ESP_A2D_CONNECTION_STATE_DISCONNECTED)
     {
+        a2dpConnected = false;
         if (DEBUG_BT) Serial.println("Bluetooth disconnected");
         readSound(bluetooth_disconnected_wav, bluetooth_disconnected_wav_len);
     }
 #else
-    (void)state;
+    if (state == ESP_A2D_CONNECTION_STATE_CONNECTED) a2dpConnected = true;
+    if (state == ESP_A2D_CONNECTION_STATE_DISCONNECTED) a2dpConnected = false;
 #endif
 }
 
@@ -342,7 +431,7 @@ void IRAM_ATTR StartPress()
 static void DownPressTask(void *parameter)
 {
     if (DEBUG_BT) Serial.println("Down Button Long Press (Task)");
-    vTaskDelay(1000 / portTICK_PERIOD_MS);
+    vTaskDelay(700 / portTICK_PERIOD_MS);
     a2dp.previous();
     DownPressTaskHandle = NULL;
     vTaskDelete(NULL);
@@ -350,9 +439,11 @@ static void DownPressTask(void *parameter)
 
 static void DownPressShortTask(void *parameter)
 {
-    int tmp_current_volume = (a2dp.get_volume() - 15) / 8;
-    tmp_current_volume = tmp_current_volume > 0 ? tmp_current_volume - 1 : tmp_current_volume;
-    a2dp.set_volume(tmp_current_volume * 8 + 15);
+    int v = (int)a2dp.get_volume();
+    v = v - 8;
+    if (v < 0) v = 0;
+    if (DEBUG_BT) Serial.printf("[BT] Volume down -> %d\n", v);
+    a2dp.set_volume((uint8_t)v);
     vTaskDelete(NULL);
 }
 
@@ -385,7 +476,7 @@ void IRAM_ATTR DownPress()
 static void UpPressTask(void *parameter)
 {
     if (DEBUG_BT) Serial.println("Up Button Long Press (Task)");
-    vTaskDelay(1000 / portTICK_PERIOD_MS);
+    vTaskDelay(700 / portTICK_PERIOD_MS);
     a2dp.next();
     UpPressTaskHandle = NULL;
     vTaskDelete(NULL);
@@ -393,9 +484,11 @@ static void UpPressTask(void *parameter)
 
 static void UpPressShortTask(void *parameter)
 {
-    int tmp_current_volume = (a2dp.get_volume() - 15) / 8;
-    tmp_current_volume = tmp_current_volume < 14 ? tmp_current_volume + 1 : tmp_current_volume;
-    a2dp.set_volume(tmp_current_volume * 8 + 15);
+    int v = (int)a2dp.get_volume();
+    v = v + 8;
+    if (v > 127) v = 127;
+    if (DEBUG_BT) Serial.printf("[BT] Volume up -> %d\n", v);
+    a2dp.set_volume((uint8_t)v);
     vTaskDelete(NULL);
 }
 
@@ -425,6 +518,60 @@ void IRAM_ATTR UpPress()
     }
 }
 
+// Map IO14 (BTN_INC_BAL) to UpPress* behavior (short: volume up, long: next)
+void IRAM_ATTR BtnInc()
+{
+    if (digitalRead(BTN_INC_BAL) == LOW)
+    {
+        isIncPressed = true;
+        incPressedTime = millis();
+        if (UpPressTaskHandle == NULL)
+        {
+            xTaskCreate(UpPressTask, "UpPressTask", 2048, NULL, 1, &UpPressTaskHandle);
+        }
+    }
+    else
+    {
+        isIncPressed = false;
+        if (millis() - incPressedTime < 700)
+        {
+            if (UpPressTaskHandle != NULL)
+            {
+                vTaskDelete(UpPressTaskHandle);
+                UpPressTaskHandle = NULL;
+            }
+            xTaskCreate(UpPressShortTask, "UpPressShortTask", 2048, NULL, 1, &UpPressShortTaskHandle);
+        }
+    }
+}
+
+// Map IO16 (BTN_DEC_BAL) to DownPress* behavior (short: volume down, long: previous)
+void IRAM_ATTR BtnDec()
+{
+    if (digitalRead(BTN_DEC_BAL) == LOW)
+    {
+        isDecPressed = true;
+        decPressedTime = millis();
+        if (DownPressTaskHandle == NULL)
+        {
+            xTaskCreate(DownPressTask, "DownPressTask", 2048, NULL, 1, &DownPressTaskHandle);
+        }
+    }
+    else
+    {
+        isDecPressed = false;
+        if (millis() - decPressedTime < 700)
+        {
+            if (DownPressTaskHandle != NULL)
+            {
+                vTaskDelete(DownPressTaskHandle);
+                DownPressTaskHandle = NULL;
+            }
+            xTaskCreate(DownPressShortTask, "DownPressShortTask", 2048, NULL, 1, &DownPressShortTaskHandle);
+        }
+    }
+}
+
 static void startBtMode()
 {
     // Stop any file playback and start A2DP sink on same I2S pins
@@ -447,6 +594,7 @@ static void startBtMode()
     readSound(bike_groove_on_wav, bike_groove_on_wav_len);
 #endif
     Serial.println("[BT] A2DP sink started");
+    a2dpConnected = false; // start in pairing mode until connection is established
 }
 
 static void stopBtMode()
@@ -1016,6 +1164,19 @@ void setup()
     strip.setBrightness(10);
     strip.show();
 
+    // Create button event queue and task
+    buttonQueue = xQueueCreate(8, sizeof(ButtonEvent));
+    if (buttonQueue)
+    {
+        xTaskCreate(buttonTask, "buttonTask", 4096, NULL, 1, &buttonTaskHandle);
+    }
+
+    // Configure local balance buttons on IO14 / IO16 (active LOW)
+    pinMode(BTN_INC_BAL, INPUT_PULLUP);
+    pinMode(BTN_DEC_BAL, INPUT_PULLUP);
+    attachInterrupt(digitalPinToInterrupt(BTN_INC_BAL), BtnInc, CHANGE);
+    attachInterrupt(digitalPinToInterrupt(BTN_DEC_BAL), BtnDec, CHANGE);
+
   // Configure ADC width and per-pin attenuation (11 dB ~ up to ~3.3 V)
   analogSetWidth(12);
   analogSetPinAttenuation(USB_VOLTAGE_PIN, ADC_11db);
@@ -1230,17 +1391,19 @@ void loop()
         // If charge status is 1, then the battery is charging
         Serial.printf("CHRG Status: %d\n", chrgStatus);
         // digitalWrite(CHRG_STATUS, blinkState ? LOW : HIGH);
-        if (usbVoltage > 4.0 && chrgStatus == 1)
-        {
-            strip.setBrightness(blinkState ? 4 : 10);
-        }
-        else
-        {
-            strip.setBrightness(10);
-        }
     }
-    // Drive NeoPixel rainbow animation
-    updateRainbow(nowMs);
+    // LED indication:
+    // - Pairing (BT started but not connected): rainbow
+    // - Otherwise: battery indicator
+    if (bt_mode && !a2dpConnected)
+    {
+        updateRainbow(nowMs);
+    }
+    else
+    {
+        bool isCharging = (usbVoltage > 4.0f) && (digitalRead(CHRG_STATUS) == 1);
+        updateBatteryLeds(nowMs, usbVoltage, batteryVoltage, isCharging);
+    }
     // PCF8575 interrupt processing moved to FreeRTOS task (pcfIntTask)
     // Button handling moved to ISR + FreeRTOS task
     // Handle deferred playback requests from PCF task
