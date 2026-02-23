@@ -4,5 +4,11 @@
   "note": "notes pour plus tard...",
   "udp_port": 8266,
   "volume": 60,
+  "ap_name": "I2S-SD",
+  "ap_password": "12345678",
+  "ap_ip_config": "192.168.4.1",
+  "esp_now_channel": 6,
+  "button_gpio13_track": 0,
+  "button_gpio16_track": 1,
   "track_assignation": []
 }

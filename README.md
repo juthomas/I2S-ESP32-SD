@@ -1,62 +1,81 @@
-# Lecteur Wav/Mp3/m4a Avec des signaux UDP
-Ce projet est un lecteur audio qui permet de lire des fichiers audio au format WAV, MP3 et M4A à partir d'une carte SD. Il utilise des signaux UDP pour contrôler la lecture audio à distance.
+# Lecteur Wav/Mp3/m4a (ESP-NOW + AP)
 
-## Dépendances
-Ce projet dépend de la bibliothèque ESP32-audioI2S, disponible à l'adresse suivante : https://github.com/schreibfaul1/ESP32-audioI2S
+Ce projet lit des fichiers audio WAV/MP3/M4A depuis la carte SD avec un ESP32.
+Chaque device démarre maintenant en:
+
+- **Mode AP** (SSID unique par device) pour accéder a l'interface web de configuration a tout moment.
+- **Mode ESP-NOW** pour diffuser des ordres de lecture a tous les devices sans routeur.
+- **UDP local** (port configurable) conserve pour pilotage direct sur le reseau AP du device.
+
+## Dependances
+
+Le projet depend de `ESP32-audioI2S`:
+https://github.com/schreibfaul1/ESP32-audioI2S
 
 ## Configuration requise
-La carte SD doit être formatée en FAT16 ou FAT32. Pour le format FAT32, il est recommandé d'utiliser l'outil de formatage disponible à l'adresse : https://www.sdcard.org/downloads/formatter/
-Les fichiers audio doivent être placés à la racine de la carte SD.
+
+- Carte SD formatee en FAT16/FAT32.
+- Fichiers audio places a la racine de la carte SD.
+
+## Interface web et configuration
+
+L'interface web permet de configurer:
+
+- `loop_file`
+- `auto_play`
+- `note`
+- `udp_port`
+- `volume`
+- `button_gpio13_track`
+- `button_gpio16_track`
+
+Les champs boutons utilisent l'index de piste:
+
+- `0` = premiere piste
+- `1` = deuxieme piste
+- `-1` = desactive le bouton
+
+Quand un bouton physique (`GPIO 13` ou `GPIO 16`) est presse, le device joue la piste configuree et diffuse la commande a tous les autres devices via ESP-NOW.
 
 ## Signaux UDP pris en charge
-Le lecteur audio peut être contrôlé à l'aide des signaux UDP suivants :
 
-- **Track** : `0` à `nombre de tracks audios` : permet de sélectionner la piste audio à lire.
-- **Volume** : `V 0` à `V 255` : permet de régler le volume de lecture.
-- **Pause/Reprise** : `P` : alterne entre la pause et la reprise de la lecture. `P 0` met en pause la lecture et `P 1` reprend la lecture.
-- **Loop file** : `L` : alterne entre le mode de lecture en boucle et le mode de lecture unique. `L 0` désactive la lecture en boucle et `L 1` active la lecture en boucle.
-- **Balance** : `B -16` à `B 16` : permet de régler l'équilibre audio entre les canaux gauche et droit.
-- **Jump** : `J 60` : permet de sauter à un endroit spécifique dans la piste audio. Le nombre spécifié représente le nombre de secondes.
-- **Tonality** : `T -40 0 6` : fonctionne comme un égaliseur, où le premier nombre correspond au gain pour les graves, le deuxième pour les médiums et le troisième pour les aigus. Le gain peut varier de -40 à 6 (en dB).
-- **GPIO** : `I 13 65535` : controlle un GPIO de la carte (13 ou 16) avec un niveau d'intensitée allant de 0 à 65535 (de 0V à 3.3V).
+- **Track** : `0` a `nombre de pistes`.
+- **Volume** : `V 0` a `V 255`.
+- **Pause/Reprise** : `P`, `P 0`, `P 1`.
+- **Loop** : `L`, `L 0`, `L 1`.
+- **Balance** : `B -16` a `B 16`.
+- **Jump** : `J 60`.
+- **Tonality** : `T -40 0 6`.
+- **Declenchement bouton** : `I 13 1` ou `I 16 1` (simule un appui bouton et diffuse la piste configuree).
 
+Exemple test UDP:
+`nc -u <ip_ap_esp32> 8266`
 
-Les signaux UDP peuvent être testés et envoyés grâve à la commande `nc -u 192.168.1.96 8266` où l'ip et le port de l'esp32 sont à renseigner
 ## Branchements
-- Carte SD :
-	- **CS** : Broche 5
-	- **MOSI** : Broche 23
-	- **MISO** : Broche 19
-	- **SCK** : Broche 18
-- Amplificateur I2S :
-	- **DIN** : Broche 25
-	- **BCLK** : Broche 27
-	- **LRC** : Broche 26
 
-## Configuration réseau
+- Carte SD
+  - **CS**: GPIO 5
+  - **MOSI**: GPIO 23
+  - **MISO**: GPIO 19
+  - **SCK**: GPIO 18
+- Amplificateur I2S
+  - **DIN**: GPIO 25
+  - **BCLK**: GPIO 27
+  - **LRC**: GPIO 26
+- Boutons
+  - **BTN1**: GPIO 13 (INPUT_PULLUP)
+  - **BTN2**: GPIO 16 (INPUT_PULLUP)
 
-### Configuration Wi-Fi
-Vous devez spécifier les détails de votre réseau Wi-Fi :
+## Configuration optionnelle via `/config.json` sur SD
 
-```cpp
-String ssid =  "NomDuRouteur"; // Nom du réseau Wi-Fi
-String password = "MotDePasse";   // Mot de passe du réseau Wi-Fi
+Exemple:
+
+```json
+{
+  "ap_name": "I2S-SD",
+  "ap_password": "12345678",
+  "esp_now_channel": 6,
+  "button_gpio13_track": 0,
+  "button_gpio16_track": 1
+}
 ```
-Vous pouvez décommenter l'une des lignes ssid et pass en fonction de votre réseau, ou les modifier pour correspondre à votre réseau personnel.
-
-### Configuration de l'adresse IP
-Si vous souhaitez utiliser une adresse IP statique pour l'ESP32, vous pouvez la configurer en modifiant les lignes suivantes :
-
-```cpp
-IPAddress ip(192, 168, 0, 215);    // Adresse IP locale (statique)
-IPAddress gateway(192, 168, 0, 1); // Adresse IP du routeur
-const unsigned int localPort = 8266; // Port de réception UDP
-IPAddress subnet(255, 255, 255, 0); // Masque de sous-réseau
-```
-Assurez-vous de spécifier les bonnes adresses IP pour votre réseau.
-
-## Variables de configuration
-- **loop_file** : Booléen (true/false) : indique si la lecture des fichiers audio doit être en boucle par défaut.
-- **REQUEST_STATIC_IP** : Booléen (true/false) : demande l'attribution d'une adresse IP statique.
-- **AUTO_PLAY_TRACK** : Booléen (true/false) : lit automatiquement la première piste audio au démarrage.
-- **DEBUG** : Booléen (true/false) : affiche les messages de débogage dans la console.

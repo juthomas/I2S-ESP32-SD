@@ -27,6 +27,14 @@ export interface Data {
   note: string;
   udp_port: number;
   volume: number;
+  ap_ssid?: string;
+  ap_ip?: string;
+  ap_name?: string;
+  ap_password?: string;
+  ap_ip_config?: string;
+  esp_now_channel?: number;
+  button_gpio13_track?: number;
+  button_gpio16_track?: number;
   track_assignation: TrackAssignation[];
 }
 

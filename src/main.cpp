@@ -34,9 +34,11 @@
 #include "jsonParser.h"
 #include "ESPAsyncWebServer.h"
 #include "Audio.h"
+#include "esp_now.h"
 #include "SD.h"
 #include "FS.h"
 #include "sstream"
+#include <algorithm>
 
 // branchement Carte SD
 #define SD_CS 5
@@ -49,24 +51,57 @@
 #define I2S_BCLK 27
 #define I2S_LRC 26
 
-String ssid = "TP-Link_F047";
-String password = "69407901";
-// String ssid = "SFR_B4C8";                 // nom du routeur
-// String ssid = "Livebox-75C0";                 // nom du routeur
-// String ssid = "Bbox-7A159A77-2.4G";     // nom du routeur
-// String password = "UxWygsEU44zhs3ynNG"; // mot de passe
-// String password = "enorksenez3vesterish"; // mot de passe
-// String password = "ipW2j3EzJQg6LF9Er6"; // mot de passe
-
-IPAddress ip(192, 168, 0, 104);    // Local IP (static)
-IPAddress gateway(192, 168, 0, 2); // Router IP
 unsigned int localPort = 8266;     // port de reception UDP
-IPAddress subnet(255, 255, 255, 0);
 
 bool loop_file = true;               // Default loop audio files
-const bool REQUEST_STATIC_IP = true; // Demander l'attribution d'une ip statique
 bool auto_play = false;              // Lit la premiere track au demarrage
 const bool DEBUG = true;             // Afficher les messages dans la console
+
+const uint8_t BUTTON_GPIO_13 = 13;
+const uint8_t BUTTON_GPIO_16 = 16;
+const uint16_t BUTTON_DEBOUNCE_MS = 40;
+const uint8_t ESP_NOW_BROADCAST_ADDR[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+const uint8_t ESP_NOW_PACKET_MAGIC = 0xA5;
+const uint8_t ESP_NOW_PACKET_VERSION = 0x01;
+const uint8_t ESP_NOW_CMD_PLAY_TRACK = 0x01;
+const size_t SETTINGS_DOC_CAPACITY = 4096;
+
+String ap_name = "I2S-SD";
+String ap_ssid = "";
+String ap_password = "12345678";
+String ap_ip = "";
+String ap_ip_config = "192.168.4.1";
+uint8_t esp_now_channel = 6;
+int16_t button_gpio13_track = 0;
+int16_t button_gpio16_track = 1;
+bool esp_now_ready = false;
+volatile bool restart_requested = false;
+uint32_t restart_requested_at_ms = 0;
+
+typedef struct __attribute__((packed)) s_esp_now_packet
+{
+    uint8_t magic;
+    uint8_t version;
+    uint8_t cmd;
+    uint8_t reserved;
+    uint16_t track_index;
+} t_esp_now_packet;
+
+typedef struct s_button_state
+{
+    uint8_t gpio;
+    bool stable_state;
+    bool last_reading;
+    uint32_t last_change_ms;
+} t_button_state;
+
+t_button_state button_states[2] = {
+    {.gpio = BUTTON_GPIO_13, .stable_state = true, .last_reading = true, .last_change_ms = 0},
+    {.gpio = BUTTON_GPIO_16, .stable_state = true, .last_reading = true, .last_change_ms = 0}};
+
+volatile bool esp_now_pending_track = false;
+volatile uint16_t esp_now_track_to_play = 0;
+portMUX_TYPE esp_now_mux = portMUX_INITIALIZER_UNLOCKED;
 namespace patch
 {
     template <typename T>
@@ -84,7 +119,7 @@ typedef struct s_music_data
 } t_music_data;
 
 String note = "";
-uint8_t volume;
+uint8_t volume = 60;
 std::vector<t_music_data> music_data;
 std::vector<String> files_list;
 Audio audio;
@@ -121,13 +156,21 @@ String getContentType(String filename)
 
 String local_vars_to_json()
 {
-    StaticJsonDocument<2048> doc;
+    DynamicJsonDocument doc(SETTINGS_DOC_CAPACITY);
 
     doc["loop_file"] = loop_file;
     doc["auto_play"] = auto_play;
     doc["note"] = note;
     doc["udp_port"] = localPort;
     doc["volume"] = volume;
+    doc["ap_ssid"] = ap_ssid;
+    doc["ap_ip"] = ap_ip;
+    doc["ap_name"] = ap_name;
+    doc["ap_password"] = ap_password;
+    doc["ap_ip_config"] = ap_ip_config;
+    doc["esp_now_channel"] = esp_now_channel;
+    doc["button_gpio13_track"] = button_gpio13_track;
+    doc["button_gpio16_track"] = button_gpio16_track;
     for (std::vector<t_music_data>::size_type i = 0; i != music_data.size(); i++)
     {
         doc["track_assignation"][i]["path"] = music_data[i].path;
@@ -140,17 +183,17 @@ String local_vars_to_json()
 
 void update_spiffs()
 {
-    char *filePath = "/data.json";
+    const char *filePath = "/data.json";
     fs::File file = SPIFFS.open(filePath, "w");
     file.print(local_vars_to_json().c_str());
     file.close();
 }
 
-void json_to_local_vars(uint8_t *data)
+void json_to_local_vars(const uint8_t *data, size_t data_len)
 {
-    StaticJsonDocument<2048> doc;
+    DynamicJsonDocument doc(SETTINGS_DOC_CAPACITY);
 
-    DeserializationError error = deserializeJson(doc, data);
+    DeserializationError error = deserializeJson(doc, data, data_len);
     if (error)
     {
         Serial.println(error.c_str());
@@ -181,20 +224,48 @@ void json_to_local_vars(uint8_t *data)
             audio.setVolume(volume);
         }
     }
+    if (doc.containsKey("button_gpio13_track"))
+    {
+        int16_t tmp_track = doc["button_gpio13_track"].as<int>();
+        button_gpio13_track = tmp_track < -1 ? -1 : tmp_track;
+    }
+    if (doc.containsKey("button_gpio16_track"))
+    {
+        int16_t tmp_track = doc["button_gpio16_track"].as<int>();
+        button_gpio16_track = tmp_track < -1 ? -1 : tmp_track;
+    }
+    if (doc.containsKey("ap_ssid"))
+        ap_ssid = doc["ap_ssid"].as<String>();
+    else if (doc.containsKey("ssid"))
+        ap_ssid = doc["ssid"].as<String>();
+    if (doc.containsKey("ap_name"))
+        ap_name = doc["ap_name"].as<String>();
+    if (doc.containsKey("ap_password"))
+        ap_password = doc["ap_password"].as<String>();
+    if (doc.containsKey("ap_ip_config"))
+        ap_ip_config = doc["ap_ip_config"].as<String>();
+    else if (doc.containsKey("ap_ip"))
+        ap_ip_config = doc["ap_ip"].as<String>();
+    if (doc.containsKey("esp_now_channel"))
+    {
+        uint8_t tmp_channel = doc["esp_now_channel"].as<unsigned int>();
+        if (tmp_channel >= 1 && tmp_channel <= 13)
+            esp_now_channel = tmp_channel;
+    }
     if (doc.containsKey("track_assignation"))
     {
         music_data.clear();
         for (uint16_t i = 0; i < doc["track_assignation"].size(); i++)
         {
             music_data.push_back((t_music_data){.path = doc["track_assignation"][i]["path"].as<String>(),
-                                                .index = doc["track_assignation"][i]["index"].as<unsigned char>()});
+                                                .index = (uint8_t)i});
         }
     }
 }
 
 void load_spiffs()
 {
-    char *filePath = "/data.json";
+    const char *filePath = "/data.json";
     fs::File file = SPIFFS.open(filePath, "r");
     if (!file)
     {
@@ -217,7 +288,7 @@ void load_spiffs()
         Serial.printf("Error reading SPIFFS");
     }
 
-    json_to_local_vars(buff);
+    json_to_local_vars(buff, read_index);
 
     free(buff);
     file.close();
@@ -227,6 +298,12 @@ void load_spiffs()
     Serial.printf("SPIFFS note : %s\n", note.c_str());
     Serial.printf("SPIFFS udp_port : %d\n", localPort);
     Serial.printf("SPIFFS volume : %d\n", volume);
+    Serial.printf("SPIFFS ap_ssid : %s\n", ap_ssid.c_str());
+    Serial.printf("SPIFFS ap_name : %s\n", ap_name.c_str());
+    Serial.printf("SPIFFS ap_ip_config : %s\n", ap_ip_config.c_str());
+    Serial.printf("SPIFFS esp_now_channel : %u\n", esp_now_channel);
+    Serial.printf("SPIFFS button_gpio13_track : %d\n", button_gpio13_track);
+    Serial.printf("SPIFFS button_gpio16_track : %d\n", button_gpio16_track);
 
     for (std::vector<t_music_data>::size_type i = 0; i != music_data.size(); i++)
     {
@@ -258,17 +335,69 @@ void load_json_config_on_sd(const char *filename)
         Serial.println(error.c_str());
         return;
     }
-    if (doc.containsKey("ssid"))
+    if (doc.containsKey("ap_ssid"))
     {
-        ssid = doc["ssid"].as<String>();
-        Serial.print("ssid on sd card :");
-        Serial.println(ssid);
+        ap_ssid = doc["ap_ssid"].as<String>();
+        Serial.print("ap_ssid on sd card :");
+        Serial.println(ap_ssid);
     }
-    if (doc.containsKey("password"))
+    else if (doc.containsKey("ssid"))
     {
-        password = doc["password"].as<String>();
-        Serial.print("password on sd card :");
-        Serial.println(password);
+        ap_ssid = doc["ssid"].as<String>();
+        Serial.print("legacy ssid reused as ap_ssid :");
+        Serial.println(ap_ssid);
+    }
+    if (doc.containsKey("ap_name"))
+    {
+        ap_name = doc["ap_name"].as<String>();
+        Serial.print("ap_name on sd card :");
+        Serial.println(ap_name);
+    }
+    if (doc.containsKey("ap_password"))
+    {
+        ap_password = doc["ap_password"].as<String>();
+        Serial.print("ap_password on sd card :");
+        Serial.println(ap_password);
+    }
+    else if (doc.containsKey("password"))
+    {
+        ap_password = doc["password"].as<String>();
+        Serial.print("legacy password reused as ap_password :");
+        Serial.println(ap_password);
+    }
+    if (doc.containsKey("ap_ip_config"))
+    {
+        ap_ip_config = doc["ap_ip_config"].as<String>();
+        Serial.print("ap_ip_config on sd card :");
+        Serial.println(ap_ip_config);
+    }
+    else if (doc.containsKey("ap_ip"))
+    {
+        ap_ip_config = doc["ap_ip"].as<String>();
+        Serial.print("legacy ap_ip reused as ap_ip_config :");
+        Serial.println(ap_ip_config);
+    }
+    if (doc.containsKey("esp_now_channel"))
+    {
+        uint8_t tmp_channel = doc["esp_now_channel"].as<unsigned int>();
+        if (tmp_channel >= 1 && tmp_channel <= 13)
+        {
+            esp_now_channel = tmp_channel;
+            Serial.print("esp_now_channel on sd card :");
+            Serial.println(esp_now_channel);
+        }
+    }
+    if (doc.containsKey("button_gpio13_track"))
+    {
+        button_gpio13_track = doc["button_gpio13_track"].as<int>();
+        Serial.print("button_gpio13_track on sd card :");
+        Serial.println(button_gpio13_track);
+    }
+    if (doc.containsKey("button_gpio16_track"))
+    {
+        button_gpio16_track = doc["button_gpio16_track"].as<int>();
+        Serial.print("button_gpio16_track on sd card :");
+        Serial.println(button_gpio16_track);
     }
 }
 
@@ -320,12 +449,367 @@ std::vector<String> listSdFiles(const char *dirname)
 void update_music_from_sd()
 {
     files_list = listSdFiles("/");
+    std::vector<t_music_data> previous_order = music_data;
     music_data.clear();
+
+    for (std::vector<t_music_data>::size_type i = 0; i != previous_order.size(); i++)
+    {
+        const String &candidate = previous_order[i].path;
+        if (std::find(files_list.begin(), files_list.end(), candidate) != files_list.end())
+        {
+            bool already_added = false;
+            for (std::vector<t_music_data>::size_type j = 0; j != music_data.size(); j++)
+            {
+                if (music_data[j].path == candidate)
+                {
+                    already_added = true;
+                    break;
+                }
+            }
+            if (!already_added)
+            {
+                music_data.push_back((t_music_data){.path = candidate, .index = 0});
+            }
+        }
+    }
+
     for (std::vector<String>::size_type i = 0; i != files_list.size(); i++)
     {
-        music_data.push_back((t_music_data){.path = files_list[i],
-                                            .index = i});
+        bool already_added = false;
+        for (std::vector<t_music_data>::size_type j = 0; j != music_data.size(); j++)
+        {
+            if (music_data[j].path == files_list[i])
+            {
+                already_added = true;
+                break;
+            }
+        }
+        if (!already_added)
+        {
+            music_data.push_back((t_music_data){.path = files_list[i], .index = 0});
+        }
     }
+
+    for (std::vector<t_music_data>::size_type i = 0; i != music_data.size(); i++)
+    {
+        music_data[i].index = (uint8_t)i;
+    }
+}
+
+void apply_reordered_paths(const std::vector<String> &ordered_paths)
+{
+    if (ordered_paths.size() == 0 || music_data.size() == 0)
+        return;
+
+    std::vector<t_music_data> reordered;
+    reordered.reserve(music_data.size());
+
+    for (std::vector<String>::size_type i = 0; i != ordered_paths.size(); i++)
+    {
+        for (std::vector<t_music_data>::size_type j = 0; j != music_data.size(); j++)
+        {
+            if (music_data[j].path == ordered_paths[i])
+            {
+                bool already_added = false;
+                for (std::vector<t_music_data>::size_type k = 0; k != reordered.size(); k++)
+                {
+                    if (reordered[k].path == music_data[j].path)
+                    {
+                        already_added = true;
+                        break;
+                    }
+                }
+                if (!already_added)
+                {
+                    reordered.push_back((t_music_data){.path = music_data[j].path, .index = 0});
+                }
+            }
+        }
+    }
+
+    for (std::vector<t_music_data>::size_type i = 0; i != music_data.size(); i++)
+    {
+        bool already_added = false;
+        for (std::vector<t_music_data>::size_type j = 0; j != reordered.size(); j++)
+        {
+            if (reordered[j].path == music_data[i].path)
+            {
+                already_added = true;
+                break;
+            }
+        }
+        if (!already_added)
+        {
+            reordered.push_back((t_music_data){.path = music_data[i].path, .index = 0});
+        }
+    }
+
+    music_data = reordered;
+    for (std::vector<t_music_data>::size_type i = 0; i != music_data.size(); i++)
+    {
+        music_data[i].index = (uint8_t)i;
+    }
+}
+
+String get_device_suffix()
+{
+    uint64_t chip_id = ESP.getEfuseMac();
+    char suffix[7];
+    snprintf(suffix, sizeof(suffix), "%06lX", (unsigned long)(chip_id & 0xFFFFFF));
+    return String(suffix);
+}
+
+String build_ap_ssid()
+{
+    String prefix = ap_name;
+    prefix.trim();
+    if (prefix.length() == 0)
+        prefix = "I2S-SD";
+    if (prefix.length() > 24)
+        prefix = prefix.substring(0, 24);
+    return prefix + "-" + get_device_suffix();
+}
+
+String resolve_ap_ssid()
+{
+    String configured_ssid = ap_ssid;
+    configured_ssid.trim();
+    if (configured_ssid.length() > 31)
+        configured_ssid = configured_ssid.substring(0, 31);
+    if (configured_ssid.length() > 0)
+        return configured_ssid;
+    return build_ap_ssid();
+}
+
+bool parse_ipv4_string(const String &ip_value, IPAddress &parsed_ip)
+{
+    int octet1 = 0;
+    int octet2 = 0;
+    int octet3 = 0;
+    int octet4 = 0;
+    if (sscanf(ip_value.c_str(), "%d.%d.%d.%d", &octet1, &octet2, &octet3, &octet4) != 4)
+    {
+        return false;
+    }
+    if (octet1 < 0 || octet1 > 255 || octet2 < 0 || octet2 > 255 || octet3 < 0 || octet3 > 255 || octet4 < 0 || octet4 > 255)
+    {
+        return false;
+    }
+    parsed_ip = IPAddress((uint8_t)octet1, (uint8_t)octet2, (uint8_t)octet3, (uint8_t)octet4);
+    return true;
+}
+
+void sanitize_network_settings()
+{
+    ap_ssid.trim();
+    if (ap_ssid.length() > 31)
+    {
+        ap_ssid = ap_ssid.substring(0, 31);
+    }
+
+    ap_name.trim();
+    if (ap_name.length() == 0)
+    {
+        ap_name = "I2S-SD";
+    }
+
+    ap_password.trim();
+    if (ap_password.length() < 8)
+    {
+        Serial.println("AP password too short, fallback to 12345678");
+        ap_password = "12345678";
+    }
+    if (ap_password.length() > 63)
+    {
+        ap_password = ap_password.substring(0, 63);
+    }
+
+    if (esp_now_channel < 1 || esp_now_channel > 13)
+    {
+        esp_now_channel = 6;
+    }
+
+    IPAddress parsed_ip;
+    if (!parse_ipv4_string(ap_ip_config, parsed_ip))
+    {
+        Serial.println("Invalid AP IP, fallback to 192.168.4.1");
+        ap_ip_config = "192.168.4.1";
+    }
+}
+
+void schedule_restart(uint32_t delay_ms)
+{
+    restart_requested = true;
+    restart_requested_at_ms = millis() + delay_ms;
+}
+
+void handle_pending_restart()
+{
+    if (!restart_requested)
+    {
+        return;
+    }
+    if ((int32_t)(millis() - restart_requested_at_ms) >= 0)
+    {
+        Serial.println("Applying network changes, restarting...");
+        delay(100);
+        ESP.restart();
+    }
+}
+
+bool play_track_by_index(uint16_t audio_to_play)
+{
+    if (music_data.size() > audio_to_play)
+    {
+        String target_path = music_data[audio_to_play].path;
+        if (!SD.exists(target_path))
+        {
+            update_music_from_sd();
+            if (music_data.size() <= audio_to_play)
+            {
+                Serial.printf("Sound number %d is out of range\n", audio_to_play);
+                return false;
+            }
+            target_path = music_data[audio_to_play].path;
+        }
+
+        Serial.printf("Playing : %s\n", target_path.c_str());
+        audio.connecttoFS(SD, target_path.c_str());
+        if (loop_file)
+        {
+            audio.setFileLoop(true);
+        }
+        return true;
+    }
+    Serial.printf("Sound number %d is out of range\n", audio_to_play);
+    return false;
+}
+
+int16_t get_track_for_button(uint8_t gpio)
+{
+    if (gpio == BUTTON_GPIO_13)
+        return button_gpio13_track;
+    if (gpio == BUTTON_GPIO_16)
+        return button_gpio16_track;
+    return -1;
+}
+
+void on_esp_now_receive(const uint8_t *mac_addr, const uint8_t *incoming_data, int len)
+{
+    (void)mac_addr;
+    if (len != sizeof(t_esp_now_packet))
+        return;
+
+    t_esp_now_packet packet;
+    memcpy(&packet, incoming_data, sizeof(packet));
+    if (packet.magic != ESP_NOW_PACKET_MAGIC || packet.version != ESP_NOW_PACKET_VERSION || packet.cmd != ESP_NOW_CMD_PLAY_TRACK)
+        return;
+
+    portENTER_CRITICAL_ISR(&esp_now_mux);
+    esp_now_track_to_play = packet.track_index;
+    esp_now_pending_track = true;
+    portEXIT_CRITICAL_ISR(&esp_now_mux);
+}
+
+bool init_esp_now()
+{
+    esp_now_ready = false;
+
+    if (esp_now_init() != ESP_OK)
+    {
+        Serial.println("Error initializing ESP-NOW");
+        return false;
+    }
+    esp_now_register_recv_cb(on_esp_now_receive);
+
+    esp_now_peer_info_t peer_info = {};
+    memcpy(peer_info.peer_addr, ESP_NOW_BROADCAST_ADDR, sizeof(ESP_NOW_BROADCAST_ADDR));
+    peer_info.channel = esp_now_channel;
+    peer_info.encrypt = false;
+
+    esp_err_t add_peer_result = esp_now_add_peer(&peer_info);
+    if (add_peer_result != ESP_OK && add_peer_result != ESP_ERR_ESPNOW_EXIST)
+    {
+        Serial.printf("ESP-NOW add peer error: %d\n", add_peer_result);
+        return false;
+    }
+    esp_now_ready = true;
+    Serial.println("ESP-NOW initialized");
+    return true;
+}
+
+void send_esp_now_play_track(uint16_t track_index)
+{
+    if (!esp_now_ready)
+        return;
+
+    t_esp_now_packet packet = {
+        .magic = ESP_NOW_PACKET_MAGIC,
+        .version = ESP_NOW_PACKET_VERSION,
+        .cmd = ESP_NOW_CMD_PLAY_TRACK,
+        .reserved = 0,
+        .track_index = track_index};
+
+    esp_err_t send_result = esp_now_send(ESP_NOW_BROADCAST_ADDR, (uint8_t *)&packet, sizeof(packet));
+    if (send_result != ESP_OK)
+    {
+        Serial.printf("ESP-NOW send failed: %d\n", send_result);
+    }
+}
+
+void handle_button_pressed(uint8_t gpio)
+{
+    int16_t configured_track = get_track_for_button(gpio);
+    if (configured_track < 0)
+    {
+        Serial.printf("GPIO %u: no track assigned\n", gpio);
+        return;
+    }
+    Serial.printf("GPIO %u pressed, track %d\n", gpio, configured_track);
+    if (play_track_by_index((uint16_t)configured_track))
+    {
+        send_esp_now_play_track((uint16_t)configured_track);
+    }
+}
+
+void poll_button_state(t_button_state &button, uint32_t now_ms)
+{
+    bool reading = digitalRead(button.gpio);
+
+    if (reading != button.last_reading)
+    {
+        button.last_reading = reading;
+        button.last_change_ms = now_ms;
+    }
+
+    if ((uint32_t)(now_ms - button.last_change_ms) >= BUTTON_DEBOUNCE_MS && button.stable_state != reading)
+    {
+        button.stable_state = reading;
+        if (button.stable_state == LOW)
+            handle_button_pressed(button.gpio);
+    }
+}
+
+void poll_buttons()
+{
+    uint32_t now_ms = millis();
+    poll_button_state(button_states[0], now_ms);
+    poll_button_state(button_states[1], now_ms);
+}
+
+void handle_pending_esp_now_commands()
+{
+    if (!esp_now_pending_track)
+        return;
+
+    uint16_t track_to_play = 0;
+    portENTER_CRITICAL(&esp_now_mux);
+    track_to_play = esp_now_track_to_play;
+    esp_now_pending_track = false;
+    portEXIT_CRITICAL(&esp_now_mux);
+
+    Serial.printf("ESP-NOW track received: %u\n", track_to_play);
+    play_track_by_index(track_to_play);
 }
 
 void handleDelete(AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total)
@@ -334,16 +818,23 @@ void handleDelete(AsyncWebServerRequest *request, uint8_t *data, size_t len, siz
 
     StaticJsonDocument<2048> doc;
 
-    DeserializationError error = deserializeJson(doc, data);
+    DeserializationError error = deserializeJson(doc, data, len);
     if (error)
     {
         Serial.println(error.c_str());
         return;
     }
-    int file_index = doc["index"].as<unsigned int>();
-    Serial.printf("Removing file %d\n", file_index);
-    SD.remove(files_list[file_index].c_str());
+    int file_index = doc["index"].as<int>();
+    if (file_index < 0 || file_index >= (int)music_data.size())
+    {
+        request->send(400, "text/plain", "Invalid file index");
+        return;
+    }
+    String path_to_remove = music_data[file_index].path;
+    Serial.printf("Removing file %d (%s)\n", file_index, path_to_remove.c_str());
+    SD.remove(path_to_remove.c_str());
     update_music_from_sd();
+    update_spiffs();
     request->send(200);
 }
 
@@ -353,11 +844,86 @@ void handleStop(AsyncWebServerRequest *request, uint8_t *data, size_t len, size_
     request->send(200);
 }
 
+void handleReorder(AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total)
+{
+    DynamicJsonDocument doc(2048);
+    DeserializationError error = deserializeJson(doc, data, len);
+    if (error || !doc.containsKey("paths"))
+    {
+        request->send(400, "text/plain", "Invalid reorder payload");
+        return;
+    }
+
+    JsonArray paths = doc["paths"].as<JsonArray>();
+    if (paths.isNull() || paths.size() == 0)
+    {
+        request->send(400, "text/plain", "No paths provided");
+        return;
+    }
+
+    std::vector<String> ordered_paths;
+    ordered_paths.reserve(paths.size());
+    for (JsonVariant value : paths)
+    {
+        String candidate = value.as<String>();
+        if (candidate.length() > 0)
+        {
+            ordered_paths.push_back(candidate);
+        }
+    }
+    if (ordered_paths.size() == 0)
+    {
+        request->send(400, "text/plain", "No valid paths provided");
+        return;
+    }
+
+    update_music_from_sd();
+    apply_reordered_paths(ordered_paths);
+    update_spiffs();
+    request->send(200, "application/json", local_vars_to_json());
+}
+
+void handleSimulateButton(AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total)
+{
+    DynamicJsonDocument doc(256);
+    DeserializationError error = deserializeJson(doc, data, len);
+    if (error || !doc.containsKey("gpio"))
+    {
+        request->send(400, "text/plain", "Invalid simulate payload");
+        return;
+    }
+
+    int gpio = doc["gpio"].as<int>();
+    if (gpio != BUTTON_GPIO_13 && gpio != BUTTON_GPIO_16)
+    {
+        request->send(400, "text/plain", "Unsupported GPIO");
+        return;
+    }
+
+    handle_button_pressed((uint8_t)gpio);
+    request->send(200);
+}
+
 void handleSettings(AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total)
 {
-    Serial.printf("Handle settings : %s\n", data);
-    json_to_local_vars(data);
+    String previous_ap_ssid = ap_ssid;
+    String previous_ap_name = ap_name;
+    String previous_ap_password = ap_password;
+    String previous_ap_ip_config = ap_ip_config;
+    uint8_t previous_channel = esp_now_channel;
+    unsigned int previous_udp_port = localPort;
+
+    Serial.printf("Handle settings body size: %u\n", len);
+    json_to_local_vars(data, len);
+    sanitize_network_settings();
     update_spiffs();
+
+    bool network_changed = previous_ap_ssid != ap_ssid ||
+                           previous_ap_name != ap_name ||
+                           previous_ap_password != ap_password ||
+                           previous_ap_ip_config != ap_ip_config ||
+                           previous_channel != esp_now_channel ||
+                           previous_udp_port != localPort;
 
     // StaticJsonDocument<2048> doc;
     printf("Json to send : %s\n", local_vars_to_json().c_str());
@@ -372,13 +938,17 @@ void handleSettings(AsyncWebServerRequest *request, uint8_t *data, size_t len, s
     // audio.connecttoFS(SD, files_list[file_index].c_str());
 
     request->send(200);
+    if (network_changed)
+    {
+        schedule_restart(700);
+    }
 }
 
 void handlePlay(AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total)
 {
     StaticJsonDocument<2048> doc;
 
-    DeserializationError error = deserializeJson(doc, data);
+    DeserializationError error = deserializeJson(doc, data, len);
     if (error)
     {
         Serial.println(error.c_str());
@@ -386,11 +956,7 @@ void handlePlay(AsyncWebServerRequest *request, uint8_t *data, size_t len, size_
     }
     int file_index = doc["index"].as<unsigned int>();
     Serial.printf("Playing file %d\n", file_index);
-    audio.connecttoFS(SD, files_list[file_index].c_str());
-    if (loop_file)
-    {
-        audio.setFileLoop(true);
-    }
+    play_track_by_index(file_index);
     request->send(200);
 }
 void handleRequest(AsyncWebServerRequest *request)
@@ -453,17 +1019,19 @@ void handleFileUpload(AsyncWebServerRequest *request, String filename, size_t in
         Serial.print("Upload: END :");
         Serial.println(len);
         update_music_from_sd();
+        update_spiffs();
         request->send(200);
     }
 }
 
 void setup()
 {
-    ledcSetup(0, 12000, 16);
-    ledcSetup(1, 12000, 16);
-    // Assigne le canal PWM au pins
-    ledcAttachPin(13, 0);
-    ledcAttachPin(16, 1);
+    pinMode(BUTTON_GPIO_13, INPUT_PULLUP);
+    pinMode(BUTTON_GPIO_16, INPUT_PULLUP);
+    button_states[0].stable_state = digitalRead(BUTTON_GPIO_13);
+    button_states[0].last_reading = button_states[0].stable_state;
+    button_states[1].stable_state = digitalRead(BUTTON_GPIO_16);
+    button_states[1].last_reading = button_states[1].stable_state;
 
     pinMode(SD_CS, OUTPUT);
     pinMode(2, OUTPUT); ///
@@ -490,27 +1058,34 @@ void setup()
 
     load_spiffs();
     Serial.printf("JSON : %s/n", local_vars_to_json().c_str());
-    WiFi.mode(WIFI_STA);
-    if (REQUEST_STATIC_IP)
-    {
-        WiFi.config(ip, gateway, subnet); // Static IP Address
-    }
-    WiFi.begin(ssid.c_str(), password.c_str());
 
-    Serial.print("Connecting to \"" + ssid + "\"");
-    while (WiFi.status() != WL_CONNECTED)
+    sanitize_network_settings();
+    WiFi.mode(WIFI_AP_STA);
+    WiFi.setSleep(false);
+    IPAddress configured_ap_ip;
+    parse_ipv4_string(ap_ip_config, configured_ap_ip);
+    IPAddress ap_subnet(255, 255, 255, 0);
+    if (!WiFi.softAPConfig(configured_ap_ip, configured_ap_ip, ap_subnet))
     {
-        Serial.print("...");
-        delay(500);
+        Serial.println("AP IP config failed, continuing with defaults");
     }
-    Serial.println("Connected");
-    digitalWrite(2, 0); ///
+    ap_ssid = resolve_ap_ssid();
+    bool ap_started = WiFi.softAP(ap_ssid.c_str(), ap_password.c_str(), esp_now_channel, false, 4);
+    if (!ap_started)
+    {
+        Serial.println("AP initialization failed!");
+    }
+    ap_ip = WiFi.softAPIP().toString();
+    ap_ip_config = ap_ip;
+    digitalWrite(2, 0);
     udp.begin(localPort);
+    init_esp_now();
     if (DEBUG)
     {
-        Serial.begin(115200);
-        Serial.print("IP: ");
-        Serial.println(WiFi.localIP());
+        Serial.printf("AP SSID: %s\n", ap_ssid.c_str());
+        Serial.printf("AP IP: %s\n", ap_ip.c_str());
+        Serial.printf("ESP-NOW channel: %u\n", esp_now_channel);
+        Serial.printf("UDP port: %u\n", localPort);
     }
     server.on("/", HTTP_ANY, [](AsyncWebServerRequest *request)
               { request->send(SPIFFS, "/index.html", String(), false); });
@@ -529,6 +1104,10 @@ void setup()
         "/delete", HTTP_POST, [](AsyncWebServerRequest *request) {}, NULL, handleDelete);
     server.on(
         "/settings", HTTP_POST, [](AsyncWebServerRequest *request) {}, NULL, handleSettings);
+    server.on(
+        "/reorder", HTTP_POST, [](AsyncWebServerRequest *request) {}, NULL, handleReorder);
+    server.on(
+        "/simulate_button", HTTP_POST, [](AsyncWebServerRequest *request) {}, NULL, handleSimulateButton);
     server.onFileUpload(handleFileUpload);
     // server.on("/edit", HTTP_POST, handleFileUpload2);
 
@@ -546,7 +1125,7 @@ void setup()
     // printf("test : %s\n", files_list[1].c_str());
     if (auto_play)
     {
-        audio.connecttoFS(SD, files_list[0].c_str());
+        play_track_by_index(0);
     }
     if (loop_file)
     {
@@ -596,6 +1175,9 @@ void splitString(String message, char separator, String data[5])
 void loop()
 {
     audio.loop();
+    handle_pending_restart();
+    handle_pending_esp_now_commands();
+    poll_buttons();
     static int32_t test = 0;
     digitalWrite(2, test < 500 ? 0 : 1);
     test++;
@@ -618,7 +1200,7 @@ void loop()
         {
             // Volume
             // "V 0" to "V 255"
-            Serial.printf("Set Volume to : %d\n", data[1].toInt());
+            Serial.printf("Set Volume to : %ld\n", data[1].toInt());
             audio.setVolume(data[1].toInt());
         }
         else if (data[0].c_str()[0] == 'P')
@@ -628,7 +1210,7 @@ void loop()
             int8_t action = -1;
             if (data[1] != "")
             {
-                Serial.printf("Second argument is %d\n", data[1].toInt());
+                Serial.printf("Second argument is %ld\n", data[1].toInt());
                 action = data[1].toInt();
             }
             if ((action == 0 && audio.isRunning()) || (action == 1 && !audio.isRunning()) || action == -1)
@@ -648,7 +1230,7 @@ void loop()
             int8_t action = -1;
             if (data[1] != "")
             {
-                Serial.printf("Second argument is %d\n", data[1].toInt());
+                Serial.printf("Second argument is %ld\n", data[1].toInt());
                 action = data[1].toInt();
             }
             if ((action == -1 && loop_file == false) || action == 1)
@@ -674,14 +1256,14 @@ void loop()
             // "B -16" to "B 16"
             //-16 to 16
             audio.setBalance(data[1].toInt());
-            Serial.printf("Balance set to \n", data[1].toInt());
+            Serial.printf("Balance set to %ld\n", data[1].toInt());
         }
         else if (data[0].c_str()[0] == 'J')
         {
             // Jump at position in audio file
             //"J 500" jump in audio file to time
             audio.setAudioPlayPosition(data[1].toInt());
-            Serial.printf("Jump in audio file to %dsecs \n", data[1].toInt());
+            Serial.printf("Jump in audio file to %ldsecs \n", data[1].toInt());
         }
         // else if (data[0].c_str()[0] == 'J')
         // {
@@ -694,20 +1276,17 @@ void loop()
             // Set Tonality (more like an equalizer)
             //"T -40 0 6" values can be between -40 ... +6 (dB)
             audio.setTone(data[1].toInt(), data[2].toInt(), data[3].toInt());
-            Serial.printf("Tone set to low:%d band:%d high:%d\n", data[1].toInt(), data[2].toInt(), data[3].toInt());
+            Serial.printf("Tone set to low:%ld band:%ld high:%ld\n", data[1].toInt(), data[2].toInt(), data[3].toInt());
         }
         else if (data[0].c_str()[0] == 'I')
         {
-            // Set GPIO to value
-            if (data[1].toInt() == 13)
+            // Trigger button action through command:
+            // "I 13 1" or "I 16 1"
+            uint8_t requested_gpio = data[1].toInt();
+            int16_t trigger_value = data[2] == "" ? 1 : data[2].toInt();
+            if ((requested_gpio == BUTTON_GPIO_13 || requested_gpio == BUTTON_GPIO_16) && trigger_value > 0)
             {
-                ledcWrite(0, data[2].toInt());
-                Serial.printf("GPIO 13 set to :%d\n", data[2].toInt());
-            }
-            else if (data[1].toInt() == 16)
-            {
-                ledcWrite(1, data[2].toInt());
-                Serial.printf("GPIO 16 set to :%d\n", data[2].toInt());
+                handle_button_pressed(requested_gpio);
             }
         }
         else
@@ -715,19 +1294,7 @@ void loop()
             // Play track
             //"0" to "N" number of tracks in playlist
             uint16_t audio_to_play = data[0].toInt();
-            if (files_list.size() > audio_to_play)
-            {
-                printf("Playing : %s\n", files_list[audio_to_play].c_str());
-                audio.connecttoFS(SD, files_list[audio_to_play].c_str());
-            }
-            else
-            {
-                printf("Sound number %d is out of range\n", audio_to_play);
-            }
-            if (loop_file)
-            {
-                audio.setFileLoop(true);
-            }
+            play_track_by_index(audio_to_play);
         }
     }
 }
