@@ -33,6 +33,11 @@ export interface Data {
   ap_password?: string;
   ap_ip_config?: string;
   esp_now_channel?: number;
+  device_mode?: number;
+  mesh_ttl?: number;
+  ap_safety_timeout_s?: number;
+  ap_enabled?: boolean;
+  ap_runtime_enabled?: boolean;
   button_gpio13_track?: number;
   button_gpio16_track?: number;
   track_assignation: TrackAssignation[];

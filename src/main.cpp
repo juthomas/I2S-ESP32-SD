@@ -35,6 +35,7 @@
 #include "ESPAsyncWebServer.h"
 #include "Audio.h"
 #include "esp_now.h"
+#include "esp_wifi.h"
 #include "SD.h"
 #include "FS.h"
 #include "sstream"
@@ -64,28 +65,52 @@ const uint8_t ESP_NOW_BROADCAST_ADDR[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 const uint8_t ESP_NOW_PACKET_MAGIC = 0xA5;
 const uint8_t ESP_NOW_PACKET_VERSION = 0x01;
 const uint8_t ESP_NOW_CMD_PLAY_TRACK = 0x01;
+const uint8_t DEVICE_MODE_CURRENT = 0;
+const uint8_t DEVICE_MODE_MESH = 1;
+const uint8_t DEVICE_MODE_AP_OFF = 2;
+const uint8_t MESH_DEFAULT_TTL = 3;
+const uint8_t MESH_MAX_TTL = 8;
+const uint8_t MESH_SEEN_CACHE_SIZE = 32;
+const uint16_t AP_SAFETY_TIMEOUT_DEFAULT_S = 300;
+const uint16_t AP_SAFETY_TIMEOUT_MAX_S = 3600;
 const size_t SETTINGS_DOC_CAPACITY = 4096;
 
-String ap_name = "I2S-SD";
+String ap_name = "I2S-SD-DEFAULT";
 String ap_ssid = "";
 String ap_password = "12345678";
 String ap_ip = "";
 String ap_ip_config = "192.168.4.1";
 uint8_t esp_now_channel = 6;
+uint8_t device_mode = DEVICE_MODE_CURRENT;
+uint8_t mesh_ttl = MESH_DEFAULT_TTL;
+uint16_t ap_safety_timeout_s = AP_SAFETY_TIMEOUT_DEFAULT_S;
 int16_t button_gpio13_track = 0;
 int16_t button_gpio16_track = 1;
 bool esp_now_ready = false;
+bool ap_runtime_enabled = false;
+bool ap_safety_ap_activated = false;
 volatile bool restart_requested = false;
 uint32_t restart_requested_at_ms = 0;
+uint32_t device_id = 0;
+uint32_t esp_now_message_counter = 1;
+uint32_t last_esp_now_activity_ms = 0;
 
 typedef struct __attribute__((packed)) s_esp_now_packet
 {
     uint8_t magic;
     uint8_t version;
     uint8_t cmd;
-    uint8_t reserved;
+    uint8_t ttl;
     uint16_t track_index;
+    uint32_t origin_id;
+    uint32_t message_id;
 } t_esp_now_packet;
+
+typedef struct s_mesh_seen_message
+{
+    uint32_t origin_id;
+    uint32_t message_id;
+} t_mesh_seen_message;
 
 typedef struct s_button_state
 {
@@ -99,8 +124,10 @@ t_button_state button_states[2] = {
     {.gpio = BUTTON_GPIO_13, .stable_state = true, .last_reading = true, .last_change_ms = 0},
     {.gpio = BUTTON_GPIO_16, .stable_state = true, .last_reading = true, .last_change_ms = 0}};
 
-volatile bool esp_now_pending_track = false;
-volatile uint16_t esp_now_track_to_play = 0;
+volatile bool esp_now_pending_packet = false;
+t_esp_now_packet esp_now_packet_to_handle = {};
+t_mesh_seen_message mesh_seen_messages[MESH_SEEN_CACHE_SIZE] = {};
+uint8_t mesh_seen_cursor = 0;
 portMUX_TYPE esp_now_mux = portMUX_INITIALIZER_UNLOCKED;
 namespace patch
 {
@@ -169,6 +196,11 @@ String local_vars_to_json()
     doc["ap_password"] = ap_password;
     doc["ap_ip_config"] = ap_ip_config;
     doc["esp_now_channel"] = esp_now_channel;
+    doc["device_mode"] = device_mode;
+    doc["mesh_ttl"] = mesh_ttl;
+    doc["ap_safety_timeout_s"] = ap_safety_timeout_s;
+    doc["ap_enabled"] = (device_mode != DEVICE_MODE_AP_OFF);
+    doc["ap_runtime_enabled"] = ap_runtime_enabled;
     doc["button_gpio13_track"] = button_gpio13_track;
     doc["button_gpio16_track"] = button_gpio16_track;
     for (std::vector<t_music_data>::size_type i = 0; i != music_data.size(); i++)
@@ -252,6 +284,29 @@ void json_to_local_vars(const uint8_t *data, size_t data_len)
         if (tmp_channel >= 1 && tmp_channel <= 13)
             esp_now_channel = tmp_channel;
     }
+    if (doc.containsKey("device_mode"))
+    {
+        uint8_t tmp_mode = doc["device_mode"].as<unsigned int>();
+        if (tmp_mode <= DEVICE_MODE_AP_OFF)
+            device_mode = tmp_mode;
+    }
+    else if (doc.containsKey("ap_enabled"))
+    {
+        bool ap_enabled = doc["ap_enabled"].as<const bool>();
+        device_mode = ap_enabled ? DEVICE_MODE_CURRENT : DEVICE_MODE_AP_OFF;
+    }
+    if (doc.containsKey("mesh_ttl"))
+    {
+        uint8_t tmp_ttl = doc["mesh_ttl"].as<unsigned int>();
+        if (tmp_ttl >= 1 && tmp_ttl <= MESH_MAX_TTL)
+            mesh_ttl = tmp_ttl;
+    }
+    if (doc.containsKey("ap_safety_timeout_s"))
+    {
+        int32_t tmp_timeout = doc["ap_safety_timeout_s"].as<int>();
+        if (tmp_timeout >= 0 && tmp_timeout <= AP_SAFETY_TIMEOUT_MAX_S)
+            ap_safety_timeout_s = (uint16_t)tmp_timeout;
+    }
     if (doc.containsKey("track_assignation"))
     {
         music_data.clear();
@@ -302,6 +357,9 @@ void load_spiffs()
     Serial.printf("SPIFFS ap_name : %s\n", ap_name.c_str());
     Serial.printf("SPIFFS ap_ip_config : %s\n", ap_ip_config.c_str());
     Serial.printf("SPIFFS esp_now_channel : %u\n", esp_now_channel);
+    Serial.printf("SPIFFS device_mode : %u\n", device_mode);
+    Serial.printf("SPIFFS mesh_ttl : %u\n", mesh_ttl);
+    Serial.printf("SPIFFS ap_safety_timeout_s : %u\n", ap_safety_timeout_s);
     Serial.printf("SPIFFS button_gpio13_track : %d\n", button_gpio13_track);
     Serial.printf("SPIFFS button_gpio16_track : %d\n", button_gpio16_track);
 
@@ -385,6 +443,43 @@ void load_json_config_on_sd(const char *filename)
             esp_now_channel = tmp_channel;
             Serial.print("esp_now_channel on sd card :");
             Serial.println(esp_now_channel);
+        }
+    }
+    if (doc.containsKey("device_mode"))
+    {
+        uint8_t tmp_mode = doc["device_mode"].as<unsigned int>();
+        if (tmp_mode <= DEVICE_MODE_AP_OFF)
+        {
+            device_mode = tmp_mode;
+            Serial.print("device_mode on sd card :");
+            Serial.println(device_mode);
+        }
+    }
+    else if (doc.containsKey("ap_enabled"))
+    {
+        bool ap_enabled = doc["ap_enabled"].as<const bool>();
+        device_mode = ap_enabled ? DEVICE_MODE_CURRENT : DEVICE_MODE_AP_OFF;
+        Serial.print("ap_enabled on sd card :");
+        Serial.println(ap_enabled ? "true" : "false");
+    }
+    if (doc.containsKey("mesh_ttl"))
+    {
+        uint8_t tmp_ttl = doc["mesh_ttl"].as<unsigned int>();
+        if (tmp_ttl >= 1 && tmp_ttl <= MESH_MAX_TTL)
+        {
+            mesh_ttl = tmp_ttl;
+            Serial.print("mesh_ttl on sd card :");
+            Serial.println(mesh_ttl);
+        }
+    }
+    if (doc.containsKey("ap_safety_timeout_s"))
+    {
+        int32_t tmp_timeout = doc["ap_safety_timeout_s"].as<int>();
+        if (tmp_timeout >= 0 && tmp_timeout <= AP_SAFETY_TIMEOUT_MAX_S)
+        {
+            ap_safety_timeout_s = (uint16_t)tmp_timeout;
+            Serial.print("ap_safety_timeout_s on sd card :");
+            Serial.println(ap_safety_timeout_s);
         }
     }
     if (doc.containsKey("button_gpio13_track"))
@@ -551,23 +646,15 @@ void apply_reordered_paths(const std::vector<String> &ordered_paths)
     }
 }
 
-String get_device_suffix()
-{
-    uint64_t chip_id = ESP.getEfuseMac();
-    char suffix[7];
-    snprintf(suffix, sizeof(suffix), "%06lX", (unsigned long)(chip_id & 0xFFFFFF));
-    return String(suffix);
-}
-
 String build_ap_ssid()
 {
     String prefix = ap_name;
     prefix.trim();
     if (prefix.length() == 0)
-        prefix = "I2S-SD";
-    if (prefix.length() > 24)
-        prefix = prefix.substring(0, 24);
-    return prefix + "-" + get_device_suffix();
+        prefix = "I2S-SD-DEFAULT";
+    if (prefix.length() > 31)
+        prefix = prefix.substring(0, 31);
+    return prefix;
 }
 
 String resolve_ap_ssid()
@@ -579,6 +666,11 @@ String resolve_ap_ssid()
     if (configured_ssid.length() > 0)
         return configured_ssid;
     return build_ap_ssid();
+}
+
+void mark_esp_now_activity()
+{
+    last_esp_now_activity_ms = millis();
 }
 
 bool parse_ipv4_string(const String &ip_value, IPAddress &parsed_ip)
@@ -599,6 +691,70 @@ bool parse_ipv4_string(const String &ip_value, IPAddress &parsed_ip)
     return true;
 }
 
+bool is_ap_enabled_mode(uint8_t mode)
+{
+    return mode != DEVICE_MODE_AP_OFF;
+}
+
+bool is_mesh_mode(uint8_t mode)
+{
+    return mode == DEVICE_MODE_MESH;
+}
+
+bool start_soft_ap_runtime()
+{
+    IPAddress configured_ap_ip;
+    parse_ipv4_string(ap_ip_config, configured_ap_ip);
+    IPAddress ap_subnet(255, 255, 255, 0);
+
+    WiFi.mode(WIFI_AP_STA);
+    WiFi.setSleep(false);
+    if (!WiFi.softAPConfig(configured_ap_ip, configured_ap_ip, ap_subnet))
+    {
+        Serial.println("AP IP config failed, continuing with defaults");
+    }
+
+    ap_ssid = resolve_ap_ssid();
+    bool ap_started = WiFi.softAP(ap_ssid.c_str(), ap_password.c_str(), esp_now_channel, false, 4);
+    if (!ap_started)
+    {
+        Serial.println("AP initialization failed!");
+        ap_runtime_enabled = false;
+        return false;
+    }
+    ap_ip = WiFi.softAPIP().toString();
+    ap_runtime_enabled = true;
+    return true;
+}
+
+uint32_t generate_esp_now_message_id()
+{
+    uint32_t next_id = esp_now_message_counter++;
+    if (next_id == 0)
+    {
+        next_id = esp_now_message_counter++;
+    }
+    return next_id;
+}
+
+bool has_seen_mesh_message(uint32_t origin_id, uint32_t message_id)
+{
+    for (uint8_t i = 0; i < MESH_SEEN_CACHE_SIZE; i++)
+    {
+        if (mesh_seen_messages[i].origin_id == origin_id && mesh_seen_messages[i].message_id == message_id)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+void remember_mesh_message(uint32_t origin_id, uint32_t message_id)
+{
+    mesh_seen_messages[mesh_seen_cursor] = (t_mesh_seen_message){.origin_id = origin_id, .message_id = message_id};
+    mesh_seen_cursor = (mesh_seen_cursor + 1) % MESH_SEEN_CACHE_SIZE;
+}
+
 void sanitize_network_settings()
 {
     ap_ssid.trim();
@@ -610,7 +766,17 @@ void sanitize_network_settings()
     ap_name.trim();
     if (ap_name.length() == 0)
     {
-        ap_name = "I2S-SD";
+        ap_name = "I2S-SD-DEFAULT";
+    }
+
+    if (device_mode > DEVICE_MODE_AP_OFF)
+    {
+        device_mode = DEVICE_MODE_CURRENT;
+    }
+
+    if (mesh_ttl < 1 || mesh_ttl > MESH_MAX_TTL)
+    {
+        mesh_ttl = MESH_DEFAULT_TTL;
     }
 
     ap_password.trim();
@@ -627,6 +793,10 @@ void sanitize_network_settings()
     if (esp_now_channel < 1 || esp_now_channel > 13)
     {
         esp_now_channel = 6;
+    }
+    if (ap_safety_timeout_s > AP_SAFETY_TIMEOUT_MAX_S)
+    {
+        ap_safety_timeout_s = AP_SAFETY_TIMEOUT_MAX_S;
     }
 
     IPAddress parsed_ip;
@@ -654,6 +824,30 @@ void handle_pending_restart()
         Serial.println("Applying network changes, restarting...");
         delay(100);
         ESP.restart();
+    }
+}
+
+void handle_ap_off_safety_timeout()
+{
+    if (!esp_now_ready || device_mode != DEVICE_MODE_AP_OFF || ap_runtime_enabled || ap_safety_ap_activated)
+    {
+        return;
+    }
+    if (ap_safety_timeout_s == 0)
+    {
+        return;
+    }
+    uint32_t timeout_ms = (uint32_t)ap_safety_timeout_s * 1000UL;
+    if ((uint32_t)(millis() - last_esp_now_activity_ms) < timeout_ms)
+    {
+        return;
+    }
+
+    Serial.printf("ESP-NOW safety timeout reached (%us), enabling AP fallback\n", ap_safety_timeout_s);
+    if (start_soft_ap_runtime())
+    {
+        ap_safety_ap_activated = true;
+        update_spiffs();
     }
 }
 
@@ -706,8 +900,8 @@ void on_esp_now_receive(const uint8_t *mac_addr, const uint8_t *incoming_data, i
         return;
 
     portENTER_CRITICAL_ISR(&esp_now_mux);
-    esp_now_track_to_play = packet.track_index;
-    esp_now_pending_track = true;
+    esp_now_packet_to_handle = packet;
+    esp_now_pending_packet = true;
     portEXIT_CRITICAL_ISR(&esp_now_mux);
 }
 
@@ -733,28 +927,45 @@ bool init_esp_now()
         Serial.printf("ESP-NOW add peer error: %d\n", add_peer_result);
         return false;
     }
+    for (uint8_t i = 0; i < MESH_SEEN_CACHE_SIZE; i++)
+    {
+        mesh_seen_messages[i] = (t_mesh_seen_message){.origin_id = 0, .message_id = 0};
+    }
+    mesh_seen_cursor = 0;
     esp_now_ready = true;
     Serial.println("ESP-NOW initialized");
     return true;
 }
 
-void send_esp_now_play_track(uint16_t track_index)
+void send_esp_now_packet(const t_esp_now_packet &packet)
 {
     if (!esp_now_ready)
         return;
 
-    t_esp_now_packet packet = {
-        .magic = ESP_NOW_PACKET_MAGIC,
-        .version = ESP_NOW_PACKET_VERSION,
-        .cmd = ESP_NOW_CMD_PLAY_TRACK,
-        .reserved = 0,
-        .track_index = track_index};
-
-    esp_err_t send_result = esp_now_send(ESP_NOW_BROADCAST_ADDR, (uint8_t *)&packet, sizeof(packet));
+    esp_err_t send_result = esp_now_send(ESP_NOW_BROADCAST_ADDR, (const uint8_t *)&packet, sizeof(packet));
     if (send_result != ESP_OK)
     {
         Serial.printf("ESP-NOW send failed: %d\n", send_result);
     }
+    else
+    {
+        mark_esp_now_activity();
+    }
+}
+
+void send_esp_now_play_track(uint16_t track_index)
+{
+    t_esp_now_packet packet = {
+        .magic = ESP_NOW_PACKET_MAGIC,
+        .version = ESP_NOW_PACKET_VERSION,
+        .cmd = ESP_NOW_CMD_PLAY_TRACK,
+        .ttl = (uint8_t)(is_mesh_mode(device_mode) ? mesh_ttl : 0),
+        .track_index = track_index,
+        .origin_id = device_id,
+        .message_id = generate_esp_now_message_id()};
+
+    remember_mesh_message(packet.origin_id, packet.message_id);
+    send_esp_now_packet(packet);
 }
 
 void handle_button_pressed(uint8_t gpio)
@@ -799,17 +1010,36 @@ void poll_buttons()
 
 void handle_pending_esp_now_commands()
 {
-    if (!esp_now_pending_track)
+    if (!esp_now_pending_packet)
         return;
 
-    uint16_t track_to_play = 0;
+    t_esp_now_packet packet = {};
     portENTER_CRITICAL(&esp_now_mux);
-    track_to_play = esp_now_track_to_play;
-    esp_now_pending_track = false;
+    packet = esp_now_packet_to_handle;
+    esp_now_pending_packet = false;
     portEXIT_CRITICAL(&esp_now_mux);
 
-    Serial.printf("ESP-NOW track received: %u\n", track_to_play);
-    play_track_by_index(track_to_play);
+    if (packet.origin_id == device_id)
+    {
+        return;
+    }
+    mark_esp_now_activity();
+    if (has_seen_mesh_message(packet.origin_id, packet.message_id))
+    {
+        return;
+    }
+    remember_mesh_message(packet.origin_id, packet.message_id);
+
+    Serial.printf("ESP-NOW track received: %u (ttl:%u)\n", packet.track_index, packet.ttl);
+    play_track_by_index(packet.track_index);
+
+    if (is_mesh_mode(device_mode) && packet.ttl > 0)
+    {
+        t_esp_now_packet relay_packet = packet;
+        relay_packet.ttl = packet.ttl - 1;
+        delay(random(4, 15));
+        send_esp_now_packet(relay_packet);
+    }
 }
 
 void handleDelete(AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total)
@@ -910,6 +1140,8 @@ void handleSettings(AsyncWebServerRequest *request, uint8_t *data, size_t len, s
     String previous_ap_name = ap_name;
     String previous_ap_password = ap_password;
     String previous_ap_ip_config = ap_ip_config;
+    uint8_t previous_device_mode = device_mode;
+    uint16_t previous_ap_safety_timeout_s = ap_safety_timeout_s;
     uint8_t previous_channel = esp_now_channel;
     unsigned int previous_udp_port = localPort;
 
@@ -922,6 +1154,8 @@ void handleSettings(AsyncWebServerRequest *request, uint8_t *data, size_t len, s
                            previous_ap_name != ap_name ||
                            previous_ap_password != ap_password ||
                            previous_ap_ip_config != ap_ip_config ||
+                           previous_device_mode != device_mode ||
+                           previous_ap_safety_timeout_s != ap_safety_timeout_s ||
                            previous_channel != esp_now_channel ||
                            previous_udp_port != localPort;
 
@@ -1059,32 +1293,44 @@ void setup()
     load_spiffs();
     Serial.printf("JSON : %s/n", local_vars_to_json().c_str());
 
+    uint64_t chip_id = ESP.getEfuseMac();
+    device_id = (uint32_t)(chip_id & 0xFFFFFFFF);
+    if (device_id == 0)
+    {
+        device_id = 1;
+    }
+    esp_now_message_counter = 1;
+    last_esp_now_activity_ms = millis();
+    ap_safety_ap_activated = false;
+
     sanitize_network_settings();
-    WiFi.mode(WIFI_AP_STA);
-    WiFi.setSleep(false);
-    IPAddress configured_ap_ip;
-    parse_ipv4_string(ap_ip_config, configured_ap_ip);
-    IPAddress ap_subnet(255, 255, 255, 0);
-    if (!WiFi.softAPConfig(configured_ap_ip, configured_ap_ip, ap_subnet))
+    if (is_ap_enabled_mode(device_mode))
     {
-        Serial.println("AP IP config failed, continuing with defaults");
+        start_soft_ap_runtime();
     }
-    ap_ssid = resolve_ap_ssid();
-    bool ap_started = WiFi.softAP(ap_ssid.c_str(), ap_password.c_str(), esp_now_channel, false, 4);
-    if (!ap_started)
+    else
     {
-        Serial.println("AP initialization failed!");
+        WiFi.mode(WIFI_STA);
+        WiFi.setSleep(false);
+        ap_runtime_enabled = false;
+        ap_ip = "";
+        esp_err_t channel_result = esp_wifi_set_channel(esp_now_channel, WIFI_SECOND_CHAN_NONE);
+        if (channel_result != ESP_OK)
+        {
+            Serial.printf("Failed to set ESP-NOW channel: %d\n", channel_result);
+        }
     }
-    ap_ip = WiFi.softAPIP().toString();
-    ap_ip_config = ap_ip;
     digitalWrite(2, 0);
     udp.begin(localPort);
     init_esp_now();
     if (DEBUG)
     {
+        Serial.printf("Device mode: %u\n", device_mode);
         Serial.printf("AP SSID: %s\n", ap_ssid.c_str());
         Serial.printf("AP IP: %s\n", ap_ip.c_str());
         Serial.printf("ESP-NOW channel: %u\n", esp_now_channel);
+        Serial.printf("Mesh TTL: %u\n", mesh_ttl);
+        Serial.printf("AP safety timeout: %us\n", ap_safety_timeout_s);
         Serial.printf("UDP port: %u\n", localPort);
     }
     server.on("/", HTTP_ANY, [](AsyncWebServerRequest *request)
@@ -1177,6 +1423,7 @@ void loop()
     audio.loop();
     handle_pending_restart();
     handle_pending_esp_now_commands();
+    handle_ap_off_safety_timeout();
     poll_buttons();
     static int32_t test = 0;
     digitalWrite(2, test < 500 ? 0 : 1);

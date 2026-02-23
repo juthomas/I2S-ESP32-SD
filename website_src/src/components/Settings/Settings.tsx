@@ -5,6 +5,7 @@ import {
   Group,
   Modal,
   NumberInput,
+  Select,
   Switch,
   Tabs,
   Text,
@@ -39,6 +40,9 @@ export const Settings = ({ data, fetchData }: SettingsProps): JSX.Element => {
       ap_password: data?.ap_password,
       ap_ip_config: data?.ap_ip_config,
       esp_now_channel: data?.esp_now_channel,
+      device_mode: data?.device_mode ?? 0,
+      mesh_ttl: data?.mesh_ttl ?? 3,
+      ap_safety_timeout_s: data?.ap_safety_timeout_s ?? 300,
       button_gpio13_track: data?.button_gpio13_track,
       button_gpio16_track: data?.button_gpio16_track,
     },
@@ -55,10 +59,16 @@ export const Settings = ({ data, fetchData }: SettingsProps): JSX.Element => {
       ap_password: data?.ap_password,
       ap_ip_config: data?.ap_ip_config,
       esp_now_channel: data?.esp_now_channel,
+      device_mode: data?.device_mode ?? 0,
+      mesh_ttl: data?.mesh_ttl ?? 3,
+      ap_safety_timeout_s: data?.ap_safety_timeout_s ?? 300,
       button_gpio13_track: data?.button_gpio13_track,
       button_gpio16_track: data?.button_gpio16_track,
     });
   }, [data]);
+
+  const modeValue = String(form.values.device_mode ?? 0);
+  const apFieldsDisabled = modeValue === "2";
 
   const triggerPhysicalButton = async (gpio: number) => {
     setSimulatingButton(gpio);
@@ -130,22 +140,56 @@ export const Settings = ({ data, fetchData }: SettingsProps): JSX.Element => {
             </Tabs.Panel>
 
             <Tabs.Panel value="network" pt="md">
+              <Select
+                mt="md"
+                label={t("Parameters.deviceMode")}
+                data={[
+                  { value: "0", label: String(t("Parameters.modeCurrent")) },
+                  { value: "1", label: String(t("Parameters.modeMesh")) },
+                  { value: "2", label: String(t("Parameters.modeApOff")) },
+                ]}
+                value={modeValue}
+                onChange={(value) => form.setFieldValue("device_mode", Number(value ?? 0))}
+              />
+              <NumberInput
+                mt="md"
+                label={t("Parameters.meshTtl")}
+                max={8}
+                min={1}
+                {...form.getInputProps("mesh_ttl")}
+              />
+              <Text size="sm" c="dimmed" mt="xs">
+                {t("Parameters.meshTtlHint")}
+              </Text>
+              <NumberInput
+                mt="md"
+                label={t("Parameters.apSafetyTimeout")}
+                max={3600}
+                min={0}
+                {...form.getInputProps("ap_safety_timeout_s")}
+              />
+              <Text size="sm" c="dimmed" mt="xs">
+                {t("Parameters.apSafetyTimeoutHint")}
+              </Text>
               <TextInput
                 mt="md"
                 label={t("Parameters.apSsid")}
-                placeholder="I2S-SD-ABC123"
+                placeholder="I2S-SD-DEFAULT"
+                disabled={apFieldsDisabled}
                 {...form.getInputProps("ap_ssid")}
               />
               <TextInput
                 mt="md"
                 label={t("Parameters.apPassword")}
                 placeholder="8-63 chars"
+                disabled={apFieldsDisabled}
                 {...form.getInputProps("ap_password")}
               />
               <TextInput
                 mt="md"
                 label={t("Parameters.apIpConfig")}
                 placeholder="192.168.4.1"
+                disabled={apFieldsDisabled}
                 {...form.getInputProps("ap_ip_config")}
               />
               <NumberInput
@@ -168,8 +212,18 @@ export const Settings = ({ data, fetchData }: SettingsProps): JSX.Element => {
                 value={data?.ap_ip ?? ""}
               />
               <Text size="sm" c="dimmed" mt="xs">
+                {data?.ap_runtime_enabled
+                  ? t("Parameters.apRuntimeOn")
+                  : t("Parameters.apRuntimeOff")}
+              </Text>
+              <Text size="sm" c="dimmed" mt="xs">
                 {t("Parameters.networkRestartHint")}
               </Text>
+              {apFieldsDisabled && (
+                <Text size="sm" c="dimmed" mt="xs">
+                  {t("Parameters.apOffHint")}
+                </Text>
+              )}
             </Tabs.Panel>
 
             <Tabs.Panel value="buttons" pt="md">
