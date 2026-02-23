@@ -10,6 +10,7 @@ import {
   Tabs,
   Text,
   TextInput,
+  Tooltip,
 } from "@mantine/core";
 import { useForm } from "@mantine/form";
 import { useDisclosure, useMediaQuery } from "@mantine/hooks";
@@ -90,6 +91,7 @@ export const Settings = ({ data, fetchData }: SettingsProps): JSX.Element => {
         centered={!isMobile}
         fullScreen={Boolean(isMobile)}
         size={isMobile ? "100%" : "lg"}
+        radius="md"
       >
         <form
           onSubmit={form.onSubmit(() => {
@@ -269,13 +271,23 @@ export const Settings = ({ data, fetchData }: SettingsProps): JSX.Element => {
           </Tabs>
 
           <Flex justify={"space-between"} mt="md">
-            <Button type="submit">{t("Parameters.save")}</Button>
+            <Button type="submit" fullWidth={isMobile}>
+              {t("Parameters.save")}
+            </Button>
           </Flex>
         </form>
       </Modal>
-      <ActionIcon onClick={open} variant="filled" color="gray" size={"xl"}>
-        <IconSettings size={"xl"} />
-      </ActionIcon>
+      <Tooltip label={t("Parameters.parameters")} withArrow>
+        <ActionIcon
+          onClick={open}
+          variant="gradient"
+          gradient={{ from: "blue", to: "cyan" }}
+          radius="xl"
+          size={"xl"}
+        >
+          <IconSettings size={"1.2rem"} />
+        </ActionIcon>
+      </Tooltip>
     </>
   );
 };

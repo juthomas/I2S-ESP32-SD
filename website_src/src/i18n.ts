@@ -49,6 +49,8 @@ i18n.use(initReactI18next).init({
           save: "Save",
         },
         UploadFile: {
+          uploadSection: "Upload audio file",
+          selectedCount: "{{count}} file selected",
           hoursLeft: "{{hours}} hours left",
           minsLeft: "{{mins}} mins left",
           secsLeft: "{{secs}} secs left",
@@ -63,6 +65,8 @@ i18n.use(initReactI18next).init({
         },
         AudioList: {
           filesOnSdCard: "Files on SD card",
+          refresh: "Refresh files list",
+          emptyState: "No audio file found on SD card.",
           reorderHint: "Drag rows to reorder tracks (desktop) or use arrows (mobile).",
           reorder: "Reorder",
           moveUp: "Move up",
@@ -121,6 +125,8 @@ i18n.use(initReactI18next).init({
           save: "Sauvegarder",
         },
         UploadFile: {
+          uploadSection: "Upload de fichier audio",
+          selectedCount: "{{count}} fichier sélectionné",
           hoursLeft: "{{hours}} heures restantes",
           minsLeft: "{{mins}} minutes restantes",
           secsLeft: "{{secs}} secondes restantes",
@@ -135,6 +141,8 @@ i18n.use(initReactI18next).init({
         },
         AudioList: {
           filesOnSdCard: "Fichiers présents sur la carte SD",
+          refresh: "Rafraîchir la liste des fichiers",
+          emptyState: "Aucun fichier audio trouvé sur la carte SD.",
           reorderHint: "Glisser-déposer pour trier (desktop) ou utiliser les flèches (mobile).",
           reorder: "Trier",
           moveUp: "Monter",

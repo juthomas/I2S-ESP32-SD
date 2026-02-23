@@ -5,19 +5,18 @@ import {
   Box,
   Button,
   Group,
-  List,
   Progress,
+  ScrollArea,
   Table,
+  Title,
   useMantineTheme,
   Badge,
 } from "@mantine/core";
 import { IconCheck, IconPhoto, IconUpload, IconX } from "@tabler/icons-react";
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { notifications } from "@mantine/notifications";
 import { useTranslation } from "react-i18next";
-
-import { parseFile } from "music-metadata";
-// import { inspect } from 'util';
+import { useMediaQuery } from "@mantine/hooks";
 
 interface UploadFileProps {
   data?: Data;
@@ -45,12 +44,12 @@ function formatFileSize(file: File): string {
 }
 
 export const UploadFile = ({
-  data,
   fetchData,
 }: UploadFileProps): JSX.Element => {
   const openRef = useRef<() => void>(null);
   const [files, setFiles] = useState<File[]>([]);
   const theme = useMantineTheme();
+  const isMobile = useMediaQuery("(max-width: 768px)");
   const uploadStartTime = useRef<Date | null>(null);
 
   const [uploadEstimatedTime, setUploadEstimatedTime] =
@@ -156,6 +155,14 @@ export const UploadFile = ({
 
   return (
     <>
+      <Group position="apart" mb="sm">
+        <Title order={4}>{t("UploadFile.uploadSection")}</Title>
+        {files.length > 0 && (
+          <Text size="sm" c="dimmed">
+            {t("UploadFile.selectedCount", { count: files.length })}
+          </Text>
+        )}
+      </Group>
       <Dropzone
         h={200}
         multiple={false}
@@ -215,42 +222,56 @@ export const UploadFile = ({
         </Button>
       </Group>
 
-      <Table>
-        <thead>
-          <tr>
-            <th>{t("UploadFile.fileToImport")}</th>
-            <th>{t("UploadFile.size")}</th>
-            <th>{t("UploadFile.downloadOnComputer")}</th>
-          </tr>
-        </thead>
-        <tbody>
-          {files.map((file, index) => (
-            <tr key={index}>
-              <td>{file.name}</td>
-              <td>{formatFileSize(file)}</td>
-              <td>
-                <Badge
-                  onClick={() => handleFileDownload(file)}
-                  style={{ cursor: "pointer" }}
-                >
-                  {t("UploadFile.download")}
-                </Badge>
-              </td>
+      <ScrollArea mt="md">
+        <Table striped withBorder>
+          <thead>
+            <tr>
+              <th>{t("UploadFile.fileToImport")}</th>
+              <th>{t("UploadFile.size")}</th>
+              <th>{t("UploadFile.downloadOnComputer")}</th>
             </tr>
-          ))}
-        </tbody>
-      </Table>
+          </thead>
+          <tbody>
+            {files.map((file, index) => (
+              <tr key={index}>
+                <td>{file.name}</td>
+                <td>{formatFileSize(file)}</td>
+                <td>
+                  <Badge
+                    variant="light"
+                    onClick={() => handleFileDownload(file)}
+                    style={{ cursor: "pointer" }}
+                  >
+                    {t("UploadFile.download")}
+                  </Badge>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </Table>
+      </ScrollArea>
 
-      <Button onClick={() => sendFile()}>{t("UploadFile.sendFile")}</Button>
-      <Progress
-        m={5}
-        radius={"xl"}
-        size={24}
-        value={uploadProgress}
-        label={uploadProgress.toFixed(2) + "%"}
-        color={uploadColors[uploadState]}
-      />
-      <Text>{uploadEstimatedTime}</Text>
+      <Button
+        mt="md"
+        fullWidth={isMobile}
+        disabled={files.length === 0 || uploadState === "uploading"}
+        onClick={() => sendFile()}
+      >
+        {t("UploadFile.sendFile")}
+      </Button>
+      {(uploadProgress > 0 || uploadState === "uploading") && (
+        <Progress
+          mt="sm"
+          radius={"xl"}
+          size={24}
+          value={uploadProgress}
+          label={uploadProgress.toFixed(2) + "%"}
+          color={uploadColors[uploadState]}
+        />
+      )}
+      <Text mt="xs" size="sm" c="dimmed">
+        {uploadEstimatedTime}
+      </Text>
     </>
   );
 };

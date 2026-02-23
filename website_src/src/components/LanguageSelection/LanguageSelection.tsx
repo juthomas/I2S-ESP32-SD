@@ -1,22 +1,42 @@
 import { LANGUAGES } from "../../constants";
 import { useTranslation } from "react-i18next";
-import { Text } from "@mantine/core";
-export const LanguageSelection = ({}): JSX.Element => {
+import { Select, Text } from "@mantine/core";
+import type { MantineNumberSize, MantineSize } from "@mantine/core";
+
+interface LanguageSelectionProps {
+  compact?: boolean;
+  width?: MantineNumberSize;
+  size?: MantineSize;
+}
+
+export const LanguageSelection = ({
+  compact = false,
+  width,
+  size,
+}: LanguageSelectionProps): JSX.Element => {
   const { i18n, t } = useTranslation();
-  const onChangeLang = (e: React.ChangeEvent<HTMLSelectElement>) => {
-    const lang_code = e.target.value;
+  const currentLanguage = i18n.language.split(/-|_/)[0];
+  const onChangeLang = (lang_code: string | null) => {
+    if (!lang_code) return;
     i18n.changeLanguage(lang_code);
   };
+
   return (
     <>
-      <Text> {t("title")}</Text>
-      <select defaultValue={i18n.language} onChange={onChangeLang}>
-        {LANGUAGES.map(({ code, label }) => (
-          <option key={code} value={code}>
-            {label}
-          </option>
-        ))}
-      </select>
+      {!compact && <Text size="sm">{t("label")}</Text>}
+      <Select
+        w={width ?? (compact ? 120 : 180)}
+        size={size ?? (compact ? "xs" : "sm")}
+        value={currentLanguage}
+        onChange={onChangeLang}
+        data={LANGUAGES.map(({ code, label }) => ({
+          value: code,
+          label,
+        }))}
+        searchable={false}
+        withinPortal={false}
+        aria-label={String(t("label"))}
+      />
     </>
   );
 };

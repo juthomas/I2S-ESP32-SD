@@ -106,100 +106,118 @@ export const AudioList = ({ data, fetchData }: AudioListProps): JSX.Element => {
     <>
       <Box sx={{ display: "flex", justifyContent: "space-between" }}>
         <Title order={4}>{t("AudioList.filesOnSdCard")}</Title>
-        <ActionIcon variant="filled" color="blue" onClick={() => fetchData()}>
+        <ActionIcon
+          variant="light"
+          color="blue"
+          onClick={() => fetchData()}
+          disabled={isReordering}
+          title={t("AudioList.refresh")}
+        >
           <IconRefresh />
         </ActionIcon>
       </Box>
       <Text size="sm" c="dimmed" mt="xs">
         {t("AudioList.reorderHint")}
       </Text>
-      <ScrollArea>
-        <Table verticalSpacing="sm" highlightOnHover>
-          <thead>
-            <tr>
-              <th>{t("AudioList.reorder")}</th>
-              <th>{t("AudioList.file")}</th>
-              <th>{t("AudioList.index")}</th>
-              <th>{t("AudioList.downloadOnComputer")}</th>
-              <th>{t("AudioList.playOnESP")}</th>
-              <th>{t("AudioList.suppress")}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {tracks.map((element, index) => (
-              <tr
-                key={element.path}
-                draggable={!isMobile && !isReordering}
-                onDragStart={() => setDraggedIndex(index)}
-                onDragOver={(event) => event.preventDefault()}
-                onDrop={() => void handleDrop(index)}
-                style={{ opacity: draggedIndex === index ? 0.5 : 1 }}
-              >
-                <td>
-                  <Group spacing={4} noWrap>
-                    {!isMobile && <IconGripVertical size="1rem" />}
-                    <ActionIcon
-                      size="sm"
-                      variant="subtle"
-                      disabled={index === 0 || isReordering}
-                      onClick={() => void handleMoveByStep(index, -1)}
-                      title={t("AudioList.moveUp")}
-                    >
-                      <IconArrowUp size="1rem" />
-                    </ActionIcon>
-                    <ActionIcon
-                      size="sm"
-                      variant="subtle"
-                      disabled={index === tracks.length - 1 || isReordering}
-                      onClick={() => void handleMoveByStep(index, 1)}
-                      title={t("AudioList.moveDown")}
-                    >
-                      <IconArrowDown size="1rem" />
-                    </ActionIcon>
-                  </Group>
-                </td>
-                <td>{element.path.substring(1)}</td>
-                <td>{element.index}</td>
-                <td>
-                  <Badge
-                    onClick={() => handleLinkDownload(element.path)}
-                    style={{ cursor: "pointer" }}
-                  >
-                    {t("AudioList.download")}
-                  </Badge>
-                </td>
-                <td>
-                  <Group spacing={6} noWrap>
-                    <Badge
-                      onClick={() => axios.post("/play", { index: element.index })}
-                      style={{ cursor: "pointer" }}
-                    >
-                      {t("AudioList.play")}
-                    </Badge>
-                    <Badge
-                      onClick={() => axios.post("/stop", { index: element.index })}
-                      style={{ cursor: "pointer" }}
-                    >
-                      {t("AudioList.stop")}
-                    </Badge>
-                  </Group>
-                </td>
-                <td>
-                  <Badge
-                    color="red"
-                    onClick={() =>
-                      axios.post("/delete", { index: element.index }).then(() => fetchData())
-                    }
-                    style={{ cursor: "pointer" }}
-                  >
-                    {t("AudioList.suppress")}
-                  </Badge>
-                </td>
+      {tracks.length === 0 ? (
+        <Text size="sm" c="dimmed" mt="sm">
+          {t("AudioList.emptyState")}
+        </Text>
+      ) : (
+        <ScrollArea>
+          <Table verticalSpacing="sm" highlightOnHover striped withBorder>
+            <thead>
+              <tr>
+                <th>{t("AudioList.reorder")}</th>
+                <th>{t("AudioList.file")}</th>
+                <th>{t("AudioList.index")}</th>
+                <th>{t("AudioList.downloadOnComputer")}</th>
+                <th>{t("AudioList.playOnESP")}</th>
+                <th>{t("AudioList.suppress")}</th>
               </tr>
-            ))}
-          </tbody>
-        </Table>
-      </ScrollArea>
+            </thead>
+            <tbody>
+              {tracks.map((element, index) => (
+                <tr
+                  key={element.path}
+                  draggable={!isMobile && !isReordering}
+                  onDragStart={() => setDraggedIndex(index)}
+                  onDragOver={(event) => event.preventDefault()}
+                  onDrop={() => void handleDrop(index)}
+                  style={{ opacity: draggedIndex === index ? 0.5 : 1 }}
+                >
+                  <td>
+                    <Group spacing={4} noWrap>
+                      {!isMobile && <IconGripVertical size="1rem" />}
+                      <ActionIcon
+                        size="sm"
+                        variant="subtle"
+                        disabled={index === 0 || isReordering}
+                        onClick={() => void handleMoveByStep(index, -1)}
+                        title={t("AudioList.moveUp")}
+                      >
+                        <IconArrowUp size="1rem" />
+                      </ActionIcon>
+                      <ActionIcon
+                        size="sm"
+                        variant="subtle"
+                        disabled={index === tracks.length - 1 || isReordering}
+                        onClick={() => void handleMoveByStep(index, 1)}
+                        title={t("AudioList.moveDown")}
+                      >
+                        <IconArrowDown size="1rem" />
+                      </ActionIcon>
+                    </Group>
+                  </td>
+                  <td>{element.path.substring(1)}</td>
+                  <td>{element.index}</td>
+                  <td>
+                    <Badge
+                      variant="light"
+                      onClick={() => handleLinkDownload(element.path)}
+                      style={{ cursor: "pointer" }}
+                    >
+                      {t("AudioList.download")}
+                    </Badge>
+                  </td>
+                  <td>
+                    <Group spacing={6} noWrap>
+                      <Badge
+                        variant="light"
+                        color="green"
+                        onClick={() => axios.post("/play", { index: element.index })}
+                        style={{ cursor: "pointer" }}
+                      >
+                        {t("AudioList.play")}
+                      </Badge>
+                      <Badge
+                        variant="light"
+                        color="yellow"
+                        onClick={() => axios.post("/stop", { index: element.index })}
+                        style={{ cursor: "pointer" }}
+                      >
+                        {t("AudioList.stop")}
+                      </Badge>
+                    </Group>
+                  </td>
+                  <td>
+                    <Badge
+                      color="red"
+                      variant="light"
+                      onClick={() =>
+                        axios.post("/delete", { index: element.index }).then(() => fetchData())
+                      }
+                      style={{ cursor: "pointer" }}
+                    >
+                      {t("AudioList.suppress")}
+                    </Badge>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </Table>
+        </ScrollArea>
+      )}
     </>
   );
 };
