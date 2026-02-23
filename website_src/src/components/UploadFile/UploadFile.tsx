@@ -56,9 +56,14 @@ export const UploadFile = ({
     useState<String | null>();
   const [uploadProgress, setUploadProgress] = useState(0);
   const [uploadState, setUploadState] = useState<
-    "failed" | "uploading" | "done"
-  >("uploading");
-  const uploadColors = { failed: "red", uploading: "blue", done: "green" };
+    "idle" | "failed" | "uploading" | "done"
+  >("idle");
+  const uploadColors = {
+    idle: "gray",
+    failed: "red",
+    uploading: "blue",
+    done: "green",
+  };
   const { t } = useTranslation();
 
   const handleFileDownload = (file: File) => {
@@ -170,6 +175,9 @@ export const UploadFile = ({
         onDrop={(files) => {
           console.log("accepted files", files);
           setFiles(files);
+          setUploadProgress(0);
+          setUploadEstimatedTime(null);
+          setUploadState("idle");
         }}
         onReject={(files) => console.log("rejected files", files)}
         styles={{ inner: { height: "100%" } }}
