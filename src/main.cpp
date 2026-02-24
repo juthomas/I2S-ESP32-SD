@@ -61,9 +61,16 @@ const bool DEBUG = true;             // Afficher les messages dans la console
 const uint8_t BUTTON_GPIO_13 = 13;
 const uint8_t BUTTON_GPIO_16 = 16;
 const uint16_t BUTTON_DEBOUNCE_MS = 40;
+const uint8_t BUTTON_PULL_MODE_UP = 0;
+const uint8_t BUTTON_PULL_MODE_DOWN = 1;
+const uint8_t BUTTON_PULL_MODE_NONE = 2;
+const uint8_t BUTTON_ACTIVE_LEVEL_LOW = 0;
+const uint8_t BUTTON_ACTIVE_LEVEL_HIGH = 1;
+const uint16_t REMOTE_PLAYBACK_DEDUP_WINDOW_MS = 250;
 const uint8_t ESP_NOW_BROADCAST_ADDR[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 const uint8_t ESP_NOW_PACKET_MAGIC = 0xA5;
-const uint8_t ESP_NOW_PACKET_VERSION = 0x01;
+const uint8_t ESP_NOW_PACKET_VERSION_LEGACY = 0x01;
+const uint8_t ESP_NOW_PACKET_VERSION = 0x02;
 const uint8_t ESP_NOW_CMD_PLAY_TRACK = 0x01;
 const uint8_t DEVICE_MODE_CURRENT = 0;
 const uint8_t DEVICE_MODE_MESH = 1;
@@ -87,6 +94,10 @@ uint8_t mesh_ttl = MESH_DEFAULT_TTL;
 uint16_t ap_safety_timeout_s = AP_SAFETY_TIMEOUT_DEFAULT_S;
 int16_t button_gpio13_track = 0;
 int16_t button_gpio16_track = 1;
+uint8_t button_gpio13_pull_mode = BUTTON_PULL_MODE_UP;
+uint8_t button_gpio16_pull_mode = BUTTON_PULL_MODE_UP;
+uint8_t button_gpio13_active_level = BUTTON_ACTIVE_LEVEL_LOW;
+uint8_t button_gpio16_active_level = BUTTON_ACTIVE_LEVEL_LOW;
 bool esp_now_ready = false;
 bool ap_runtime_enabled = false;
 bool ap_safety_ap_activated = false;
@@ -106,6 +117,15 @@ typedef struct __attribute__((packed)) s_esp_now_packet
     uint32_t origin_id;
     uint32_t message_id;
 } t_esp_now_packet;
+
+typedef struct __attribute__((packed)) s_esp_now_packet_legacy
+{
+    uint8_t magic;
+    uint8_t version;
+    uint8_t cmd;
+    uint8_t reserved;
+    uint16_t track_index;
+} t_esp_now_packet_legacy;
 
 typedef struct s_mesh_seen_message
 {
@@ -127,8 +147,11 @@ t_button_state button_states[2] = {
 
 volatile bool esp_now_pending_packet = false;
 t_esp_now_packet esp_now_packet_to_handle = {};
+volatile uint8_t esp_now_packet_format_to_handle = 0;
 t_mesh_seen_message mesh_seen_messages[MESH_SEEN_CACHE_SIZE] = {};
 uint8_t mesh_seen_cursor = 0;
+uint16_t last_remote_played_track = 0xFFFF;
+uint32_t last_remote_played_at_ms = 0;
 portMUX_TYPE esp_now_mux = portMUX_INITIALIZER_UNLOCKED;
 namespace patch
 {
@@ -254,6 +277,10 @@ String local_vars_to_json()
     doc["ap_runtime_enabled"] = ap_runtime_enabled;
     doc["button_gpio13_track"] = button_gpio13_track;
     doc["button_gpio16_track"] = button_gpio16_track;
+    doc["button_gpio13_pull_mode"] = button_gpio13_pull_mode;
+    doc["button_gpio16_pull_mode"] = button_gpio16_pull_mode;
+    doc["button_gpio13_active_level"] = button_gpio13_active_level;
+    doc["button_gpio16_active_level"] = button_gpio16_active_level;
     for (std::vector<t_music_data>::size_type i = 0; i != music_data.size(); i++)
     {
         doc["track_assignation"][i]["path"] = music_data[i].path;
@@ -316,6 +343,22 @@ void json_to_local_vars(const uint8_t *data, size_t data_len)
     {
         int16_t tmp_track = doc["button_gpio16_track"].as<int>();
         button_gpio16_track = tmp_track < -1 ? -1 : tmp_track;
+    }
+    if (doc.containsKey("button_gpio13_pull_mode"))
+    {
+        button_gpio13_pull_mode = doc["button_gpio13_pull_mode"].as<unsigned int>();
+    }
+    if (doc.containsKey("button_gpio16_pull_mode"))
+    {
+        button_gpio16_pull_mode = doc["button_gpio16_pull_mode"].as<unsigned int>();
+    }
+    if (doc.containsKey("button_gpio13_active_level"))
+    {
+        button_gpio13_active_level = doc["button_gpio13_active_level"].as<unsigned int>();
+    }
+    if (doc.containsKey("button_gpio16_active_level"))
+    {
+        button_gpio16_active_level = doc["button_gpio16_active_level"].as<unsigned int>();
     }
     if (doc.containsKey("ap_ssid"))
         ap_ssid = doc["ap_ssid"].as<String>();
@@ -413,6 +456,10 @@ void load_spiffs()
     Serial.printf("SPIFFS ap_safety_timeout_s : %u\n", ap_safety_timeout_s);
     Serial.printf("SPIFFS button_gpio13_track : %d\n", button_gpio13_track);
     Serial.printf("SPIFFS button_gpio16_track : %d\n", button_gpio16_track);
+    Serial.printf("SPIFFS button_gpio13_pull_mode : %u\n", button_gpio13_pull_mode);
+    Serial.printf("SPIFFS button_gpio16_pull_mode : %u\n", button_gpio16_pull_mode);
+    Serial.printf("SPIFFS button_gpio13_active_level : %u\n", button_gpio13_active_level);
+    Serial.printf("SPIFFS button_gpio16_active_level : %u\n", button_gpio16_active_level);
 
     for (std::vector<t_music_data>::size_type i = 0; i != music_data.size(); i++)
     {
@@ -544,6 +591,30 @@ void load_json_config_on_sd(const char *filename)
         button_gpio16_track = doc["button_gpio16_track"].as<int>();
         Serial.print("button_gpio16_track on sd card :");
         Serial.println(button_gpio16_track);
+    }
+    if (doc.containsKey("button_gpio13_pull_mode"))
+    {
+        button_gpio13_pull_mode = doc["button_gpio13_pull_mode"].as<unsigned int>();
+        Serial.print("button_gpio13_pull_mode on sd card :");
+        Serial.println(button_gpio13_pull_mode);
+    }
+    if (doc.containsKey("button_gpio16_pull_mode"))
+    {
+        button_gpio16_pull_mode = doc["button_gpio16_pull_mode"].as<unsigned int>();
+        Serial.print("button_gpio16_pull_mode on sd card :");
+        Serial.println(button_gpio16_pull_mode);
+    }
+    if (doc.containsKey("button_gpio13_active_level"))
+    {
+        button_gpio13_active_level = doc["button_gpio13_active_level"].as<unsigned int>();
+        Serial.print("button_gpio13_active_level on sd card :");
+        Serial.println(button_gpio13_active_level);
+    }
+    if (doc.containsKey("button_gpio16_active_level"))
+    {
+        button_gpio16_active_level = doc["button_gpio16_active_level"].as<unsigned int>();
+        Serial.print("button_gpio16_active_level on sd card :");
+        Serial.println(button_gpio16_active_level);
     }
 }
 
@@ -834,6 +905,30 @@ void sanitize_network_settings()
     {
         mesh_ttl = MESH_DEFAULT_TTL;
     }
+    if (button_gpio13_track < -1)
+    {
+        button_gpio13_track = -1;
+    }
+    if (button_gpio16_track < -1)
+    {
+        button_gpio16_track = -1;
+    }
+    if (button_gpio13_pull_mode > BUTTON_PULL_MODE_NONE)
+    {
+        button_gpio13_pull_mode = BUTTON_PULL_MODE_UP;
+    }
+    if (button_gpio16_pull_mode > BUTTON_PULL_MODE_NONE)
+    {
+        button_gpio16_pull_mode = BUTTON_PULL_MODE_UP;
+    }
+    if (button_gpio13_active_level > BUTTON_ACTIVE_LEVEL_HIGH)
+    {
+        button_gpio13_active_level = BUTTON_ACTIVE_LEVEL_LOW;
+    }
+    if (button_gpio16_active_level > BUTTON_ACTIVE_LEVEL_HIGH)
+    {
+        button_gpio16_active_level = BUTTON_ACTIVE_LEVEL_LOW;
+    }
 
     ap_password.trim();
     if (ap_password.length() < 8)
@@ -935,6 +1030,19 @@ bool play_track_by_index(uint16_t audio_to_play)
     return false;
 }
 
+bool should_skip_remote_duplicate_play(uint16_t track_index)
+{
+    uint32_t now = millis();
+    if (last_remote_played_track == track_index &&
+        (uint32_t)(now - last_remote_played_at_ms) < REMOTE_PLAYBACK_DEDUP_WINDOW_MS)
+    {
+        return true;
+    }
+    last_remote_played_track = track_index;
+    last_remote_played_at_ms = now;
+    return false;
+}
+
 int16_t get_track_for_button(uint8_t gpio)
 {
     if (gpio == BUTTON_GPIO_13)
@@ -944,19 +1052,91 @@ int16_t get_track_for_button(uint8_t gpio)
     return -1;
 }
 
+uint8_t get_pull_mode_for_button(uint8_t gpio)
+{
+    if (gpio == BUTTON_GPIO_13)
+        return button_gpio13_pull_mode;
+    if (gpio == BUTTON_GPIO_16)
+        return button_gpio16_pull_mode;
+    return BUTTON_PULL_MODE_UP;
+}
+
+uint8_t get_active_level_for_button(uint8_t gpio)
+{
+    if (gpio == BUTTON_GPIO_13)
+        return button_gpio13_active_level;
+    if (gpio == BUTTON_GPIO_16)
+        return button_gpio16_active_level;
+    return BUTTON_ACTIVE_LEVEL_LOW;
+}
+
+bool is_button_active_level(uint8_t gpio, bool level)
+{
+    uint8_t active_level = get_active_level_for_button(gpio);
+    if (active_level == BUTTON_ACTIVE_LEVEL_HIGH)
+        return level == HIGH;
+    return level == LOW;
+}
+
+void apply_button_input_config()
+{
+    for (uint8_t i = 0; i < 2; i++)
+    {
+        t_button_state &button = button_states[i];
+        uint8_t pull_mode = get_pull_mode_for_button(button.gpio);
+        if (pull_mode == BUTTON_PULL_MODE_DOWN)
+            pinMode(button.gpio, INPUT_PULLDOWN);
+        else if (pull_mode == BUTTON_PULL_MODE_NONE)
+            pinMode(button.gpio, INPUT);
+        else
+            pinMode(button.gpio, INPUT_PULLUP);
+
+        bool reading = digitalRead(button.gpio);
+        button.stable_state = reading;
+        button.last_reading = reading;
+        button.last_change_ms = millis();
+    }
+}
+
 void on_esp_now_receive(const uint8_t *mac_addr, const uint8_t *incoming_data, int len)
 {
     (void)mac_addr;
-    if (len != sizeof(t_esp_now_packet))
-        return;
+    t_esp_now_packet packet = {};
+    uint8_t packet_format = 0;
 
-    t_esp_now_packet packet;
-    memcpy(&packet, incoming_data, sizeof(packet));
-    if (packet.magic != ESP_NOW_PACKET_MAGIC || packet.version != ESP_NOW_PACKET_VERSION || packet.cmd != ESP_NOW_CMD_PLAY_TRACK)
+    if (len == (int)sizeof(t_esp_now_packet))
+    {
+        t_esp_now_packet candidate = {};
+        memcpy(&candidate, incoming_data, sizeof(candidate));
+        if (candidate.magic != ESP_NOW_PACKET_MAGIC || candidate.version != ESP_NOW_PACKET_VERSION || candidate.cmd != ESP_NOW_CMD_PLAY_TRACK)
+            return;
+        packet = candidate;
+        packet_format = ESP_NOW_PACKET_VERSION;
+    }
+    else if (len == (int)sizeof(t_esp_now_packet_legacy))
+    {
+        t_esp_now_packet_legacy legacy = {};
+        memcpy(&legacy, incoming_data, sizeof(legacy));
+        if (legacy.magic != ESP_NOW_PACKET_MAGIC || legacy.version != ESP_NOW_PACKET_VERSION_LEGACY || legacy.cmd != ESP_NOW_CMD_PLAY_TRACK)
+            return;
+        packet = (t_esp_now_packet){
+            .magic = legacy.magic,
+            .version = legacy.version,
+            .cmd = legacy.cmd,
+            .ttl = 0,
+            .track_index = legacy.track_index,
+            .origin_id = 0,
+            .message_id = 0};
+        packet_format = ESP_NOW_PACKET_VERSION_LEGACY;
+    }
+    else
+    {
         return;
+    }
 
     portENTER_CRITICAL_ISR(&esp_now_mux);
     esp_now_packet_to_handle = packet;
+    esp_now_packet_format_to_handle = packet_format;
     esp_now_pending_packet = true;
     portEXIT_CRITICAL_ISR(&esp_now_mux);
 }
@@ -993,12 +1173,12 @@ bool init_esp_now()
     return true;
 }
 
-void send_esp_now_packet(const t_esp_now_packet &packet)
+void send_esp_now_packet(const uint8_t *packet_data, size_t packet_len)
 {
     if (!esp_now_ready)
         return;
 
-    esp_err_t send_result = esp_now_send(ESP_NOW_BROADCAST_ADDR, (const uint8_t *)&packet, sizeof(packet));
+    esp_err_t send_result = esp_now_send(ESP_NOW_BROADCAST_ADDR, packet_data, packet_len);
     if (send_result != ESP_OK)
     {
         Serial.printf("ESP-NOW send failed: %d\n", send_result);
@@ -1009,8 +1189,26 @@ void send_esp_now_packet(const t_esp_now_packet &packet)
     }
 }
 
+void send_esp_now_play_track_legacy(uint16_t track_index)
+{
+    t_esp_now_packet_legacy packet = {
+        .magic = ESP_NOW_PACKET_MAGIC,
+        .version = ESP_NOW_PACKET_VERSION_LEGACY,
+        .cmd = ESP_NOW_CMD_PLAY_TRACK,
+        .reserved = 0,
+        .track_index = track_index};
+    send_esp_now_packet((const uint8_t *)&packet, sizeof(packet));
+}
+
 void send_esp_now_play_track(uint16_t track_index)
 {
+    // Compatibility path: keep current mode interoperable with legacy firmware.
+    if (!is_relay_mode(device_mode))
+    {
+        send_esp_now_play_track_legacy(track_index);
+        return;
+    }
+
     t_esp_now_packet packet = {
         .magic = ESP_NOW_PACKET_MAGIC,
         .version = ESP_NOW_PACKET_VERSION,
@@ -1021,7 +1219,9 @@ void send_esp_now_play_track(uint16_t track_index)
         .message_id = generate_esp_now_message_id()};
 
     remember_mesh_message(packet.origin_id, packet.message_id);
-    send_esp_now_packet(packet);
+    send_esp_now_packet((const uint8_t *)&packet, sizeof(packet));
+    // Also send legacy packet so mixed fleets can still play in relay mode.
+    send_esp_now_play_track_legacy(track_index);
 }
 
 void handle_button_pressed(uint8_t gpio)
@@ -1052,7 +1252,7 @@ void poll_button_state(t_button_state &button, uint32_t now_ms)
     if ((uint32_t)(now_ms - button.last_change_ms) >= BUTTON_DEBOUNCE_MS && button.stable_state != reading)
     {
         button.stable_state = reading;
-        if (button.stable_state == LOW)
+        if (is_button_active_level(button.gpio, button.stable_state))
             handle_button_pressed(button.gpio);
     }
 }
@@ -1070,10 +1270,32 @@ void handle_pending_esp_now_commands()
         return;
 
     t_esp_now_packet packet = {};
+    uint8_t packet_format = 0;
     portENTER_CRITICAL(&esp_now_mux);
     packet = esp_now_packet_to_handle;
+    packet_format = esp_now_packet_format_to_handle;
     esp_now_pending_packet = false;
+    esp_now_packet_format_to_handle = 0;
     portEXIT_CRITICAL(&esp_now_mux);
+
+    if (packet_format == ESP_NOW_PACKET_VERSION_LEGACY)
+    {
+        mark_esp_now_activity();
+        Serial.printf("ESP-NOW legacy track received: %u\n", packet.track_index);
+        if (should_skip_remote_duplicate_play(packet.track_index))
+        {
+            Serial.printf("Ignoring duplicate remote track (legacy): %u\n", packet.track_index);
+        }
+        else
+        {
+            play_track_by_index(packet.track_index);
+        }
+        return;
+    }
+    if (packet_format != ESP_NOW_PACKET_VERSION)
+    {
+        return;
+    }
 
     if (packet.origin_id == device_id)
     {
@@ -1087,14 +1309,21 @@ void handle_pending_esp_now_commands()
     remember_mesh_message(packet.origin_id, packet.message_id);
 
     Serial.printf("ESP-NOW track received: %u (ttl:%u)\n", packet.track_index, packet.ttl);
-    play_track_by_index(packet.track_index);
+    if (should_skip_remote_duplicate_play(packet.track_index))
+    {
+        Serial.printf("Ignoring duplicate remote track: %u\n", packet.track_index);
+    }
+    else
+    {
+        play_track_by_index(packet.track_index);
+    }
 
     if (is_relay_mode(device_mode) && packet.ttl > 0)
     {
         t_esp_now_packet relay_packet = packet;
         relay_packet.ttl = packet.ttl - 1;
         delay(random(4, 15));
-        send_esp_now_packet(relay_packet);
+        send_esp_now_packet((const uint8_t *)&relay_packet, sizeof(relay_packet));
     }
 }
 
@@ -1204,6 +1433,7 @@ void handleSettings(AsyncWebServerRequest *request, uint8_t *data, size_t len, s
     Serial.printf("Handle settings body size: %u\n", len);
     json_to_local_vars(data, len);
     sanitize_network_settings();
+    apply_button_input_config();
     update_spiffs();
 
     bool network_changed = previous_ap_ssid != ap_ssid ||
@@ -1311,13 +1541,6 @@ void handleFileUpload(AsyncWebServerRequest *request, String filename, size_t in
 
 void setup()
 {
-    pinMode(BUTTON_GPIO_13, INPUT_PULLUP);
-    pinMode(BUTTON_GPIO_16, INPUT_PULLUP);
-    button_states[0].stable_state = digitalRead(BUTTON_GPIO_13);
-    button_states[0].last_reading = button_states[0].stable_state;
-    button_states[1].stable_state = digitalRead(BUTTON_GPIO_16);
-    button_states[1].last_reading = button_states[1].stable_state;
-
     pinMode(SD_CS, OUTPUT);
     pinMode(2, OUTPUT); ///
     digitalWrite(2, 1); ///
@@ -1355,6 +1578,7 @@ void setup()
     ap_safety_ap_activated = false;
 
     sanitize_network_settings();
+    apply_button_input_config();
     if (is_ap_enabled_mode(device_mode))
     {
         start_soft_ap_runtime();
@@ -1383,6 +1607,8 @@ void setup()
         Serial.printf("Mesh TTL: %u\n", mesh_ttl);
         Serial.printf("AP safety timeout: %us\n", ap_safety_timeout_s);
         Serial.printf("UDP port: %u\n", localPort);
+        Serial.printf("GPIO13 cfg pull:%u active:%u track:%d\n", button_gpio13_pull_mode, button_gpio13_active_level, button_gpio13_track);
+        Serial.printf("GPIO16 cfg pull:%u active:%u track:%d\n", button_gpio16_pull_mode, button_gpio16_active_level, button_gpio16_track);
     }
     server.on("/", HTTP_ANY, [](AsyncWebServerRequest *request)
               { request->send(SPIFFS, "/index.html", String(), false); });

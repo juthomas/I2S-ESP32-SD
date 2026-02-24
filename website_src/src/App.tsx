@@ -55,6 +55,10 @@ export interface Data {
   ap_runtime_enabled?: boolean;
   button_gpio13_track?: number;
   button_gpio16_track?: number;
+  button_gpio13_pull_mode?: number;
+  button_gpio16_pull_mode?: number;
+  button_gpio13_active_level?: number;
+  button_gpio16_active_level?: number;
   track_assignation: TrackAssignation[];
 }
 

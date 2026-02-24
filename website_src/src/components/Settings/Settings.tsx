@@ -46,6 +46,10 @@ export const Settings = ({ data, fetchData }: SettingsProps): JSX.Element => {
       ap_safety_timeout_s: data?.ap_safety_timeout_s ?? 300,
       button_gpio13_track: data?.button_gpio13_track,
       button_gpio16_track: data?.button_gpio16_track,
+      button_gpio13_pull_mode: data?.button_gpio13_pull_mode ?? 0,
+      button_gpio16_pull_mode: data?.button_gpio16_pull_mode ?? 0,
+      button_gpio13_active_level: data?.button_gpio13_active_level ?? 0,
+      button_gpio16_active_level: data?.button_gpio16_active_level ?? 0,
     },
   });
 
@@ -65,6 +69,10 @@ export const Settings = ({ data, fetchData }: SettingsProps): JSX.Element => {
       ap_safety_timeout_s: data?.ap_safety_timeout_s ?? 300,
       button_gpio13_track: data?.button_gpio13_track,
       button_gpio16_track: data?.button_gpio16_track,
+      button_gpio13_pull_mode: data?.button_gpio13_pull_mode ?? 0,
+      button_gpio16_pull_mode: data?.button_gpio16_pull_mode ?? 0,
+      button_gpio13_active_level: data?.button_gpio13_active_level ?? 0,
+      button_gpio16_active_level: data?.button_gpio16_active_level ?? 0,
     });
   }, [data]);
 
@@ -238,6 +246,31 @@ export const Settings = ({ data, fetchData }: SettingsProps): JSX.Element => {
                 min={-1}
                 {...form.getInputProps("button_gpio13_track")}
               />
+              <Select
+                mt="md"
+                label={t("Parameters.buttonGpio13PullMode")}
+                data={[
+                  { value: "0", label: String(t("Parameters.pullModeUp")) },
+                  { value: "1", label: String(t("Parameters.pullModeDown")) },
+                  { value: "2", label: String(t("Parameters.pullModeNone")) },
+                ]}
+                value={String(form.values.button_gpio13_pull_mode ?? 0)}
+                onChange={(value) =>
+                  form.setFieldValue("button_gpio13_pull_mode", Number(value ?? 0))
+                }
+              />
+              <Select
+                mt="md"
+                label={t("Parameters.buttonGpio13ActiveLevel")}
+                data={[
+                  { value: "0", label: String(t("Parameters.activeLevelLow")) },
+                  { value: "1", label: String(t("Parameters.activeLevelHigh")) },
+                ]}
+                value={String(form.values.button_gpio13_active_level ?? 0)}
+                onChange={(value) =>
+                  form.setFieldValue("button_gpio13_active_level", Number(value ?? 0))
+                }
+              />
               <NumberInput
                 mt="md"
                 label={t("Parameters.buttonGpio16Track")}
@@ -245,8 +278,36 @@ export const Settings = ({ data, fetchData }: SettingsProps): JSX.Element => {
                 min={-1}
                 {...form.getInputProps("button_gpio16_track")}
               />
+              <Select
+                mt="md"
+                label={t("Parameters.buttonGpio16PullMode")}
+                data={[
+                  { value: "0", label: String(t("Parameters.pullModeUp")) },
+                  { value: "1", label: String(t("Parameters.pullModeDown")) },
+                  { value: "2", label: String(t("Parameters.pullModeNone")) },
+                ]}
+                value={String(form.values.button_gpio16_pull_mode ?? 0)}
+                onChange={(value) =>
+                  form.setFieldValue("button_gpio16_pull_mode", Number(value ?? 0))
+                }
+              />
+              <Select
+                mt="md"
+                label={t("Parameters.buttonGpio16ActiveLevel")}
+                data={[
+                  { value: "0", label: String(t("Parameters.activeLevelLow")) },
+                  { value: "1", label: String(t("Parameters.activeLevelHigh")) },
+                ]}
+                value={String(form.values.button_gpio16_active_level ?? 0)}
+                onChange={(value) =>
+                  form.setFieldValue("button_gpio16_active_level", Number(value ?? 0))
+                }
+              />
               <Text size="sm" c="dimmed" mt="xs">
                 {t("Parameters.buttonTrackHelp")}
+              </Text>
+              <Text size="sm" c="dimmed" mt="xs">
+                {t("Parameters.buttonElectricalHelp")}
               </Text>
               <Group mt="md" spacing="xs">
                 <Button
