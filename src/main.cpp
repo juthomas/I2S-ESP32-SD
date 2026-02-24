@@ -1393,6 +1393,8 @@ void setup()
     server.on("/data", HTTP_GET, [](AsyncWebServerRequest *request)
               {Serial.printf("Json demandé par le site\n");
               request->send(200, "application/json", local_vars_to_json()); });
+    server.on("/health", HTTP_GET, [](AsyncWebServerRequest *request)
+              { request->send(200, "application/json", "{\"ok\":true}"); });
     server.on(
         "/play", HTTP_POST, [](AsyncWebServerRequest *request) {}, NULL, handlePlay);
     server.on(

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActionIcon,
   AppShell,
@@ -26,8 +26,10 @@ import {
   IconRefresh,
   IconSun,
   IconWifi,
+  IconWifiOff,
 } from "@tabler/icons-react";
 import { useTranslation } from "react-i18next";
+import { notifications } from "@mantine/notifications";
 
 interface TrackAssignation {
   path: string;
@@ -56,6 +58,8 @@ export interface Data {
   track_assignation: TrackAssignation[];
 }
 
+type ConnectionState = "checking" | "online" | "offline";
+
 function App() {
   const { t } = useTranslation();
   const theme = useMantineTheme();
@@ -66,7 +70,18 @@ function App() {
   const [data, setData] = useState<Data>();
   const [isLoading, setIsLoading] = useState(true);
   const [errorKey, setErrorKey] = useState<string | null>(null);
+  const [connectionState, setConnectionState] = useState<ConnectionState>("checking");
+  const healthCheckInFlightRef = useRef(false);
+  const previousConnectionStateRef = useRef<ConnectionState>("checking");
   const wifiName = data?.ap_ssid?.trim() ? data.ap_ssid : t("App.unavailable");
+  const connectionStatusLabel =
+    connectionState === "online"
+      ? t("App.connectionOnline")
+      : connectionState === "offline"
+      ? t("App.connectionOffline")
+      : t("App.connectionChecking");
+  const connectionStatusColor =
+    connectionState === "online" ? "green" : connectionState === "offline" ? "red" : "gray";
 
   const fetchData = async () => {
     setErrorKey(null);
@@ -79,18 +94,97 @@ function App() {
         console.log("Fetched data :", responseData);
       } else {
         setErrorKey("App.errorLoadData");
+        setConnectionState("offline");
       }
     } catch (error) {
       console.error("Error fetching sensor data", error);
       setErrorKey("App.errorReachDevice");
+      setConnectionState("offline");
     } finally {
       setIsLoading(false);
     }
   };
 
+  const checkServerHealth = useCallback(async () => {
+    if (healthCheckInFlightRef.current) {
+      return;
+    }
+    healthCheckInFlightRef.current = true;
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), 2500);
+    try {
+      let response = await fetch("/health", {
+        cache: "no-store",
+        signal: controller.signal,
+      });
+      if (response.status === 404) {
+        response = await fetch("/data", {
+          cache: "no-store",
+          signal: controller.signal,
+        });
+      }
+      if (!response.ok) {
+        throw new Error("Health check failed");
+      }
+      setConnectionState("online");
+    } catch (error) {
+      setConnectionState("offline");
+    } finally {
+      window.clearTimeout(timeoutId);
+      healthCheckInFlightRef.current = false;
+    }
+  }, []);
+
   useEffect(() => {
     void fetchData();
   }, []);
+
+  useEffect(() => {
+    void checkServerHealth();
+    const intervalId = window.setInterval(() => {
+      void checkServerHealth();
+    }, 3000);
+    return () => window.clearInterval(intervalId);
+  }, [checkServerHealth]);
+
+  useEffect(() => {
+    const previousState = previousConnectionStateRef.current;
+    if (previousState === "online" && connectionState === "offline") {
+      notifications.show({
+        color: "red",
+        withBorder: true,
+        autoClose: 3500,
+        icon: <IconWifiOff size="1rem" />,
+        title: t("App.connectionLostTitle"),
+        message: t("App.connectionLostMessage"),
+      });
+    }
+    if (previousState === "offline" && connectionState === "online") {
+      notifications.show({
+        color: "green",
+        withBorder: true,
+        autoClose: 2500,
+        icon: <IconWifi size="1rem" />,
+        title: t("App.connectionRestoredTitle"),
+        message: t("App.connectionRestoredMessage"),
+      });
+      void fetchData();
+    }
+    previousConnectionStateRef.current = connectionState;
+  }, [connectionState, t]);
+
+  useEffect(() => {
+    const handleOffline = () => setConnectionState("offline");
+    const handleOnline = () => {
+      void checkServerHealth();
+    };
+    window.addEventListener("offline", handleOffline);
+    window.addEventListener("online", handleOnline);
+    return () => {
+      window.removeEventListener("offline", handleOffline);
+      window.removeEventListener("online", handleOnline);
+    };
+  }, [checkServerHealth]);
 
   return (
     <AppShell
@@ -165,6 +259,9 @@ function App() {
                 </Badge>
                 <LanguageSelection compact width={90} size="xs" />
               </Group>
+              <Text size="xs" c={connectionStatusColor}>
+                {t("App.connectionStatus")}: {connectionStatusLabel}
+              </Text>
             </Stack>
           ) : (
             <Group position="apart" sx={{ height: "100%", flexWrap: "nowrap" }}>
@@ -188,6 +285,9 @@ function App() {
                   title={wifiName}
                 >
                   {wifiName}
+                </Badge>
+                <Badge color={connectionStatusColor} variant="light">
+                  {t("App.connectionStatus")}: {connectionStatusLabel}
                 </Badge>
                 <LanguageSelection compact width={120} size="xs" />
                 <ActionIcon
