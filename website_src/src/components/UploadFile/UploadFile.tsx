@@ -17,29 +17,30 @@ import { useRef, useState } from "react";
 import { notifications } from "@mantine/notifications";
 import { useTranslation } from "react-i18next";
 import { useMediaQuery } from "@mantine/hooks";
+import type { TFunction } from "i18next";
 
 interface UploadFileProps {
   data?: Data;
   fetchData: () => Promise<void>;
 }
 
-function formatFileSize(file: File): string {
+function formatFileSize(file: File, t: TFunction): string {
   const fileSize = file.size;
   const kiloByte = 1024;
   const megaByte = kiloByte * 1024;
   const gigaByte = megaByte * 1024;
 
   if (fileSize < kiloByte) {
-    return `${fileSize} Bytes`;
+    return `${fileSize} ${t("UploadFile.fileSizeBytes")}`;
   } else if (fileSize < megaByte) {
     const sizeInKB = (fileSize / kiloByte).toFixed(2);
-    return `${sizeInKB} KB`;
+    return `${sizeInKB} ${t("UploadFile.fileSizeKB")}`;
   } else if (fileSize < gigaByte) {
     const sizeInMB = (fileSize / megaByte).toFixed(2);
-    return `${sizeInMB} MB`;
+    return `${sizeInMB} ${t("UploadFile.fileSizeMB")}`;
   } else {
     const sizeInGB = (fileSize / gigaByte).toFixed(2);
-    return `${sizeInGB} GB`;
+    return `${sizeInGB} ${t("UploadFile.fileSizeGB")}`;
   }
 }
 
@@ -101,7 +102,7 @@ export const UploadFile = ({
             withBorder: true,
             autoClose: 3000,
             color: "green",
-            title: `Fichier uploadé.`,
+            title: t("UploadFile.uploadSuccess"),
             message: "",
           });
           setFiles([]);
@@ -114,7 +115,7 @@ export const UploadFile = ({
             withBorder: true,
             autoClose: 5000,
             color: "red",
-            title: `Erreur lors de l'upload du fichier.`,
+            title: t("UploadFile.uploadFailed"),
             message: "",
           });
         }
@@ -243,7 +244,7 @@ export const UploadFile = ({
             {files.map((file, index) => (
               <tr key={index}>
                 <td>{file.name}</td>
-                <td>{formatFileSize(file)}</td>
+                <td>{formatFileSize(file, t)}</td>
                 <td>
                   <Badge
                     variant="light"

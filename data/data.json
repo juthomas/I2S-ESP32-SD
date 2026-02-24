@@ -1,5 +1,5 @@
 {
-  "loop_file": true,
+  "loop_file": false,
   "auto_play": false,
   "note": "notes pour plus tard...",
   "udp_port": 8266,

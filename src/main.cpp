@@ -68,6 +68,7 @@ const uint8_t ESP_NOW_CMD_PLAY_TRACK = 0x01;
 const uint8_t DEVICE_MODE_CURRENT = 0;
 const uint8_t DEVICE_MODE_MESH = 1;
 const uint8_t DEVICE_MODE_AP_OFF = 2;
+const uint8_t DEVICE_MODE_RELAY_ONLY = 3;
 const uint8_t MESH_DEFAULT_TTL = 3;
 const uint8_t MESH_MAX_TTL = 8;
 const uint8_t MESH_SEEN_CACHE_SIZE = 32;
@@ -153,6 +154,9 @@ Audio audio;
 WiFiUDP udp;
 AsyncWebServer server(80);
 
+bool is_ap_enabled_mode(uint8_t mode);
+bool is_relay_mode(uint8_t mode);
+
 String getContentType(String filename)
 {
     if (filename.endsWith(".htm") || filename.endsWith(".html"))
@@ -177,8 +181,55 @@ String getContentType(String filename)
         return "application/zip";
     else if (filename.endsWith(".gz"))
         return "application/x-gzip";
+    else if (filename.endsWith(".wav"))
+        return "audio/wav";
+    else if (filename.endsWith(".mp3"))
+        return "audio/mpeg";
+    else if (filename.endsWith(".m4a"))
+        return "audio/mp4";
+    else if (filename.endsWith(".aac"))
+        return "audio/aac";
+    else if (filename.endsWith(".flac"))
+        return "audio/flac";
+    else if (filename.endsWith(".ogg"))
+        return "audio/ogg";
 
     return "text/plain";
+}
+
+int8_t hex_char_to_value(char c)
+{
+    if (c >= '0' && c <= '9')
+        return c - '0';
+    if (c >= 'a' && c <= 'f')
+        return 10 + (c - 'a');
+    if (c >= 'A' && c <= 'F')
+        return 10 + (c - 'A');
+    return -1;
+}
+
+String decode_url_path(const String &encoded_path)
+{
+    String decoded_path = "";
+    decoded_path.reserve(encoded_path.length());
+
+    for (size_t i = 0; i < encoded_path.length(); i++)
+    {
+        char current_char = encoded_path.charAt(i);
+        if (current_char == '%' && i + 2 < encoded_path.length())
+        {
+            int8_t high = hex_char_to_value(encoded_path.charAt(i + 1));
+            int8_t low = hex_char_to_value(encoded_path.charAt(i + 2));
+            if (high >= 0 && low >= 0)
+            {
+                decoded_path += (char)((high << 4) | low);
+                i += 2;
+                continue;
+            }
+        }
+        decoded_path += current_char;
+    }
+    return decoded_path;
 }
 
 String local_vars_to_json()
@@ -199,7 +250,7 @@ String local_vars_to_json()
     doc["device_mode"] = device_mode;
     doc["mesh_ttl"] = mesh_ttl;
     doc["ap_safety_timeout_s"] = ap_safety_timeout_s;
-    doc["ap_enabled"] = (device_mode != DEVICE_MODE_AP_OFF);
+    doc["ap_enabled"] = is_ap_enabled_mode(device_mode);
     doc["ap_runtime_enabled"] = ap_runtime_enabled;
     doc["button_gpio13_track"] = button_gpio13_track;
     doc["button_gpio16_track"] = button_gpio16_track;
@@ -287,7 +338,7 @@ void json_to_local_vars(const uint8_t *data, size_t data_len)
     if (doc.containsKey("device_mode"))
     {
         uint8_t tmp_mode = doc["device_mode"].as<unsigned int>();
-        if (tmp_mode <= DEVICE_MODE_AP_OFF)
+        if (tmp_mode <= DEVICE_MODE_RELAY_ONLY)
             device_mode = tmp_mode;
     }
     else if (doc.containsKey("ap_enabled"))
@@ -448,7 +499,7 @@ void load_json_config_on_sd(const char *filename)
     if (doc.containsKey("device_mode"))
     {
         uint8_t tmp_mode = doc["device_mode"].as<unsigned int>();
-        if (tmp_mode <= DEVICE_MODE_AP_OFF)
+        if (tmp_mode <= DEVICE_MODE_RELAY_ONLY)
         {
             device_mode = tmp_mode;
             Serial.print("device_mode on sd card :");
@@ -693,12 +744,17 @@ bool parse_ipv4_string(const String &ip_value, IPAddress &parsed_ip)
 
 bool is_ap_enabled_mode(uint8_t mode)
 {
-    return mode != DEVICE_MODE_AP_OFF;
+    return mode == DEVICE_MODE_CURRENT || mode == DEVICE_MODE_MESH;
 }
 
 bool is_mesh_mode(uint8_t mode)
 {
     return mode == DEVICE_MODE_MESH;
+}
+
+bool is_relay_mode(uint8_t mode)
+{
+    return mode == DEVICE_MODE_MESH || mode == DEVICE_MODE_RELAY_ONLY;
 }
 
 bool start_soft_ap_runtime()
@@ -769,7 +825,7 @@ void sanitize_network_settings()
         ap_name = "I2S-SD-DEFAULT";
     }
 
-    if (device_mode > DEVICE_MODE_AP_OFF)
+    if (device_mode > DEVICE_MODE_RELAY_ONLY)
     {
         device_mode = DEVICE_MODE_CURRENT;
     }
@@ -829,7 +885,7 @@ void handle_pending_restart()
 
 void handle_ap_off_safety_timeout()
 {
-    if (!esp_now_ready || device_mode != DEVICE_MODE_AP_OFF || ap_runtime_enabled || ap_safety_ap_activated)
+    if (!esp_now_ready || is_ap_enabled_mode(device_mode) || ap_runtime_enabled || ap_safety_ap_activated)
     {
         return;
     }
@@ -959,7 +1015,7 @@ void send_esp_now_play_track(uint16_t track_index)
         .magic = ESP_NOW_PACKET_MAGIC,
         .version = ESP_NOW_PACKET_VERSION,
         .cmd = ESP_NOW_CMD_PLAY_TRACK,
-        .ttl = (uint8_t)(is_mesh_mode(device_mode) ? mesh_ttl : 0),
+        .ttl = (uint8_t)(is_relay_mode(device_mode) ? mesh_ttl : 0),
         .track_index = track_index,
         .origin_id = device_id,
         .message_id = generate_esp_now_message_id()};
@@ -1033,7 +1089,7 @@ void handle_pending_esp_now_commands()
     Serial.printf("ESP-NOW track received: %u (ttl:%u)\n", packet.track_index, packet.ttl);
     play_track_by_index(packet.track_index);
 
-    if (is_mesh_mode(device_mode) && packet.ttl > 0)
+    if (is_relay_mode(device_mode) && packet.ttl > 0)
     {
         t_esp_now_packet relay_packet = packet;
         relay_packet.ttl = packet.ttl - 1;
@@ -1196,24 +1252,19 @@ void handlePlay(AsyncWebServerRequest *request, uint8_t *data, size_t len, size_
 void handleRequest(AsyncWebServerRequest *request)
 {
     String filePath = request->url(); // Obtenez l'URL demandée
+    int query_index = filePath.indexOf('?');
+    if (query_index >= 0)
+    {
+        filePath = filePath.substring(0, query_index);
+    }
+    filePath = decode_url_path(filePath);
 
     // Vérifier si le fichier existe sur la carte SD
     if (SD.exists(filePath))
     {
-        // Ouvrir le fichier en lecture
-        File file = SD.open(filePath);
-
-        // Vérifier si le fichier a été ouvert avec succès
-        if (file)
-        {
-            // Envoyer l'en-tête de réponse avec le type MIME approprié
-            String contentType = getContentType(filePath);
-            request->send(file, contentType);
-
-            // Fermer le fichier
-            file.close();
-            return;
-        }
+        String contentType = getContentType(filePath);
+        request->send(SD, filePath, contentType, true);
+        return;
     }
 
     // Si le fichier n'existe pas ou s'il y a une erreur, renvoyer une réponse 404

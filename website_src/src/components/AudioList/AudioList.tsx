@@ -21,17 +21,16 @@ import { useEffect, useState } from "react";
 import { useMediaQuery } from "@mantine/hooks";
 
 const handleLinkDownload = (link: string) => {
-  // Créez une URL pour le fichier
-  // const fileUrl = URL.createObjectURL(file);
-  // Créez un lien de téléchargement
+  const encodedPath = link
+    .split("/")
+    .map((segment, index) => (index === 0 ? segment : encodeURIComponent(segment)))
+    .join("/");
+  const suggestedName = link.split("/").filter(Boolean).pop() ?? "audio-file";
   const downloadLink = document.createElement("a");
-  downloadLink.href = link;
-  downloadLink.download = link;
-  // Ajoutez le lien de téléchargement au document
+  downloadLink.href = encodedPath;
+  downloadLink.download = suggestedName;
   document.body.appendChild(downloadLink);
-  // Cliquez sur le lien pour déclencher le téléchargement
   downloadLink.click();
-  // Supprimez le lien du document
   document.body.removeChild(downloadLink);
 };
 

@@ -27,6 +27,7 @@ import {
   IconSun,
   IconWifi,
 } from "@tabler/icons-react";
+import { useTranslation } from "react-i18next";
 
 interface TrackAssignation {
   path: string;
@@ -56,6 +57,7 @@ export interface Data {
 }
 
 function App() {
+  const { t } = useTranslation();
   const theme = useMantineTheme();
   const { colorScheme, toggleColorScheme } = useMantineColorScheme();
   const dark = colorScheme === "dark";
@@ -63,11 +65,11 @@ function App() {
 
   const [data, setData] = useState<Data>();
   const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const wifiName = data?.ap_ssid?.trim() ? data.ap_ssid : "Unavailable";
+  const [errorKey, setErrorKey] = useState<string | null>(null);
+  const wifiName = data?.ap_ssid?.trim() ? data.ap_ssid : t("App.unavailable");
 
   const fetchData = async () => {
-    setError(null);
+    setErrorKey(null);
     try {
       const response = await fetch("/data");
       console.log("Response :", response);
@@ -76,11 +78,11 @@ function App() {
         setData(responseData);
         console.log("Fetched data :", responseData);
       } else {
-        setError("Failed to load device data.");
+        setErrorKey("App.errorLoadData");
       }
     } catch (error) {
       console.error("Error fetching sensor data", error);
-      setError("Unable to reach the device.");
+      setErrorKey("App.errorReachDevice");
     } finally {
       setIsLoading(false);
     }
@@ -117,7 +119,7 @@ function App() {
               <Group position="apart" noWrap>
                 <Box sx={{ minWidth: 0 }}>
                   <Title order={4} sx={{ lineHeight: 1.1 }}>
-                    I2S SD Controller
+                    {t("App.controllerTitle")}
                   </Title>
                 </Box>
                 <Group spacing={6} noWrap>
@@ -126,7 +128,7 @@ function App() {
                     variant="outline"
                     color="blue"
                     onClick={() => void fetchData()}
-                    title="Refresh"
+                    title={t("App.refresh")}
                   >
                     <IconRefresh size="0.95rem" />
                   </ActionIcon>
@@ -135,7 +137,7 @@ function App() {
                     variant="outline"
                     color={dark ? "yellow" : "blue"}
                     onClick={() => toggleColorScheme()}
-                    title="Toggle color scheme"
+                    title={t("App.toggleColorScheme")}
                   >
                     {dark ? (
                       <IconSun size="0.95rem" />
@@ -167,9 +169,9 @@ function App() {
           ) : (
             <Group position="apart" sx={{ height: "100%", flexWrap: "nowrap" }}>
               <Box>
-                <Title order={3}>I2S SD Controller</Title>
+                <Title order={3}>{t("App.controllerTitle")}</Title>
                 <Text size="xs" color="dimmed">
-                  Pilotage multi-enceintes ESP32
+                  {t("App.controllerSubtitle")}
                 </Text>
               </Box>
               <Group spacing="xs" noWrap>
@@ -192,7 +194,7 @@ function App() {
                   variant="outline"
                   color="blue"
                   onClick={() => void fetchData()}
-                  title="Refresh"
+                  title={t("App.refresh")}
                 >
                   <IconRefresh size="1rem" />
                 </ActionIcon>
@@ -200,7 +202,7 @@ function App() {
                   variant="outline"
                   color={dark ? "yellow" : "blue"}
                   onClick={() => toggleColorScheme()}
-                  title="Toggle color scheme"
+                  title={t("App.toggleColorScheme")}
                 >
                   {dark ? (
                     <IconSun size="1.1rem" />
@@ -228,9 +230,9 @@ function App() {
           >
             <Group position="apart" align="flex-start">
               <Box>
-                <Title order={4}>Dashboard</Title>
+                <Title order={4}>{t("App.dashboardTitle")}</Title>
                 <Text size="sm" color="dimmed">
-                  Réglages, upload et contrôle audio centralisés.
+                  {t("App.dashboardSubtitle")}
                 </Text>
               </Box>
               <Settings data={data} fetchData={fetchData} />
@@ -238,17 +240,17 @@ function App() {
 
             <Group mt="sm" spacing="xs">
               <Badge color={data?.ap_runtime_enabled ? "green" : "gray"} variant="light">
-                {data?.ap_runtime_enabled ? "AP actif" : "AP inactif"}
+                {data?.ap_runtime_enabled ? t("App.apActive") : t("App.apInactive")}
               </Badge>
               <Badge color="blue" variant="light">
-                {`Tracks: ${data?.track_assignation?.length ?? 0}`}
+                {t("App.tracksCount", { count: data?.track_assignation?.length ?? 0 })}
               </Badge>
             </Group>
 
             {data?.note && (
               <Text mt="sm">
                 <Text span fw={600}>
-                  Note:{" "}
+                  {t("App.noteLabel")}{" "}
                 </Text>
                 {data.note}
               </Text>
@@ -269,7 +271,7 @@ function App() {
                 <Loader />
               </Center>
             </Paper>
-          ) : error ? (
+          ) : errorKey ? (
             <Paper
               withBorder
               p="md"
@@ -279,7 +281,7 @@ function App() {
                 borderColor: dark ? theme.colors.dark[4] : theme.colors.gray[3],
               }}
             >
-              <Text color="red">{error}</Text>
+              <Text color="red">{t(errorKey)}</Text>
             </Paper>
           ) : (
             <>

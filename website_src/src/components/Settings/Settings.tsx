@@ -69,7 +69,10 @@ export const Settings = ({ data, fetchData }: SettingsProps): JSX.Element => {
   }, [data]);
 
   const modeValue = String(form.values.device_mode ?? 0);
-  const apFieldsDisabled = modeValue === "2";
+  const apDisabledMode = modeValue === "2" || modeValue === "3";
+  const meshTtlDisabled = modeValue !== "1";
+  const currentApSsid = data?.ap_ssid?.trim() ? data.ap_ssid : "-";
+  const currentApIp = data?.ap_ip?.trim() ? data.ap_ip : "-";
 
   const triggerPhysicalButton = async (gpio: number) => {
     setSimulatingButton(gpio);
@@ -122,7 +125,7 @@ export const Settings = ({ data, fetchData }: SettingsProps): JSX.Element => {
               <TextInput
                 mt="md"
                 label={t("Parameters.notes")}
-                placeholder="Notes..."
+                placeholder={String(t("Parameters.notesPlaceholder"))}
                 {...form.getInputProps("note")}
               />
               <NumberInput
@@ -149,6 +152,7 @@ export const Settings = ({ data, fetchData }: SettingsProps): JSX.Element => {
                   { value: "0", label: String(t("Parameters.modeCurrent")) },
                   { value: "1", label: String(t("Parameters.modeMesh")) },
                   { value: "2", label: String(t("Parameters.modeApOff")) },
+                  { value: "3", label: String(t("Parameters.modeRelayOnly")) },
                 ]}
                 value={modeValue}
                 onChange={(value) => form.setFieldValue("device_mode", Number(value ?? 0))}
@@ -158,6 +162,7 @@ export const Settings = ({ data, fetchData }: SettingsProps): JSX.Element => {
                 label={t("Parameters.meshTtl")}
                 max={8}
                 min={1}
+                disabled={meshTtlDisabled}
                 {...form.getInputProps("mesh_ttl")}
               />
               <Text size="sm" c="dimmed" mt="xs">
@@ -177,41 +182,38 @@ export const Settings = ({ data, fetchData }: SettingsProps): JSX.Element => {
                 mt="md"
                 label={t("Parameters.apSsid")}
                 placeholder="I2S-SD-DEFAULT"
-                disabled={apFieldsDisabled}
                 {...form.getInputProps("ap_ssid")}
               />
+              <Text size="sm" c="dimmed" mt="xs">
+                {t("Parameters.apCurrentSsid")}:{" "}
+                <Text span c="inherit" fw={600}>
+                  {currentApSsid}
+                </Text>
+              </Text>
               <TextInput
                 mt="md"
                 label={t("Parameters.apPassword")}
-                placeholder="8-63 chars"
-                disabled={apFieldsDisabled}
+                placeholder={String(t("Parameters.apPasswordPlaceholder"))}
                 {...form.getInputProps("ap_password")}
               />
               <TextInput
                 mt="md"
                 label={t("Parameters.apIpConfig")}
                 placeholder="192.168.4.1"
-                disabled={apFieldsDisabled}
                 {...form.getInputProps("ap_ip_config")}
               />
+              <Text size="sm" c="dimmed" mt="xs">
+                {t("Parameters.apCurrentIp")}:{" "}
+                <Text span c="inherit" fw={600}>
+                  {currentApIp}
+                </Text>
+              </Text>
               <NumberInput
                 mt="md"
                 label={t("Parameters.espNowChannel")}
                 max={13}
                 min={1}
                 {...form.getInputProps("esp_now_channel")}
-              />
-              <TextInput
-                mt="md"
-                label={t("Parameters.apCurrentSsid")}
-                readOnly
-                value={data?.ap_ssid ?? ""}
-              />
-              <TextInput
-                mt="md"
-                label={t("Parameters.apCurrentIp")}
-                readOnly
-                value={data?.ap_ip ?? ""}
               />
               <Text size="sm" c="dimmed" mt="xs">
                 {data?.ap_runtime_enabled
@@ -221,7 +223,7 @@ export const Settings = ({ data, fetchData }: SettingsProps): JSX.Element => {
               <Text size="sm" c="dimmed" mt="xs">
                 {t("Parameters.networkRestartHint")}
               </Text>
-              {apFieldsDisabled && (
+              {apDisabledMode && (
                 <Text size="sm" c="dimmed" mt="xs">
                   {t("Parameters.apOffHint")}
                 </Text>
@@ -281,9 +283,25 @@ export const Settings = ({ data, fetchData }: SettingsProps): JSX.Element => {
         <ActionIcon
           onClick={open}
           variant="gradient"
-          gradient={{ from: "blue", to: "cyan" }}
-          radius="xl"
-          size={"xl"}
+          gradient={{ from: "indigo", to: "cyan", deg: 135 }}
+          radius="md"
+          size={44}
+          aria-label={t("Parameters.parameters")}
+          sx={(theme) => ({
+            boxShadow: `0 8px 24px ${
+              theme.colorScheme === "dark" ? "rgba(34, 139, 230, 0.45)" : "rgba(34, 139, 230, 0.3)"
+            }`,
+            border: `1px solid ${
+              theme.colorScheme === "dark" ? "rgba(255,255,255,0.18)" : "rgba(255,255,255,0.65)"
+            }`,
+            transition: "transform 140ms ease, box-shadow 140ms ease",
+            "&:hover": {
+              transform: "translateY(-1px) scale(1.03)",
+              boxShadow: `0 12px 30px ${
+                theme.colorScheme === "dark" ? "rgba(34, 139, 230, 0.55)" : "rgba(34, 139, 230, 0.4)"
+              }`,
+            },
+          })}
         >
           <IconSettings size={"1.2rem"} />
         </ActionIcon>
