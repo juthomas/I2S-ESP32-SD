@@ -34,6 +34,7 @@ export const Settings = ({ data, fetchData }: SettingsProps): JSX.Element => {
     initialValues: {
       loop_file: data?.loop_file,
       auto_play: data?.auto_play,
+      allow_play_over_playing: data?.allow_play_over_playing ?? false,
       note: data?.note,
       udp_port: data?.udp_port,
       volume: data?.volume,
@@ -57,6 +58,7 @@ export const Settings = ({ data, fetchData }: SettingsProps): JSX.Element => {
     form.setValues({
       loop_file: data?.loop_file,
       auto_play: data?.auto_play,
+      allow_play_over_playing: data?.allow_play_over_playing ?? false,
       note: data?.note,
       udp_port: data?.udp_port,
       volume: data?.volume,
@@ -130,18 +132,17 @@ export const Settings = ({ data, fetchData }: SettingsProps): JSX.Element => {
                 label={t("Parameters.autoPlay")}
                 {...form.getInputProps("auto_play", { type: "checkbox" })}
               />
+              <Switch
+                mt="md"
+                labelPosition="left"
+                label={t("Parameters.allowPlayOverPlaying")}
+                {...form.getInputProps("allow_play_over_playing", { type: "checkbox" })}
+              />
               <TextInput
                 mt="md"
                 label={t("Parameters.notes")}
                 placeholder={String(t("Parameters.notesPlaceholder"))}
                 {...form.getInputProps("note")}
-              />
-              <NumberInput
-                mt="md"
-                label={t("Parameters.udpPort")}
-                max={99999}
-                min={0}
-                {...form.getInputProps("udp_port")}
               />
               <NumberInput
                 mt="md"
@@ -164,6 +165,13 @@ export const Settings = ({ data, fetchData }: SettingsProps): JSX.Element => {
                 ]}
                 value={modeValue}
                 onChange={(value) => form.setFieldValue("device_mode", Number(value ?? 0))}
+              />
+              <NumberInput
+                mt="md"
+                label={t("Parameters.udpPort")}
+                max={99999}
+                min={0}
+                {...form.getInputProps("udp_port")}
               />
               <NumberInput
                 mt="md"

@@ -56,6 +56,7 @@ unsigned int localPort = 8266;     // port de reception UDP
 
 bool loop_file = true;               // Default loop audio files
 bool auto_play = false;              // Lit la premiere track au demarrage
+bool allow_play_over_playing = false; // Autoriser lancer une piste alors qu'une est deja en lecture
 const bool DEBUG = true;             // Afficher les messages dans la console
 
 const uint8_t BUTTON_GPIO_13 = 13;
@@ -82,6 +83,11 @@ const uint8_t MESH_SEEN_CACHE_SIZE = 32;
 const uint16_t AP_SAFETY_TIMEOUT_DEFAULT_S = 300;
 const uint16_t AP_SAFETY_TIMEOUT_MAX_S = 3600;
 const size_t SETTINGS_DOC_CAPACITY = 4096;
+const char *WEB_SERIAL_PROVISION_STATE_FILE = "/.webcfg.done";
+const char *WEB_SERIAL_PROVISION_PREFIX = "WEBCFG:";
+const uint32_t WEB_SERIAL_PROVISION_WINDOW_MS = 10000;
+const uint32_t WEB_SERIAL_PROVISION_READY_INTERVAL_MS = 300;
+const size_t WEB_SERIAL_PROVISION_MAX_LINE = 4096;
 
 String ap_name = "I2S-SD-DEFAULT";
 String ap_ssid = "";
@@ -101,6 +107,7 @@ uint8_t button_gpio16_active_level = BUTTON_ACTIVE_LEVEL_LOW;
 bool esp_now_ready = false;
 bool ap_runtime_enabled = false;
 bool ap_safety_ap_activated = false;
+uint32_t ap_safety_activated_at_ms = 0; // when safety AP was turned on (boot window or inactivity fallback)
 volatile bool restart_requested = false;
 uint32_t restart_requested_at_ms = 0;
 uint32_t device_id = 0;
@@ -261,6 +268,7 @@ String local_vars_to_json()
 
     doc["loop_file"] = loop_file;
     doc["auto_play"] = auto_play;
+    doc["allow_play_over_playing"] = allow_play_over_playing;
     doc["note"] = note;
     doc["udp_port"] = localPort;
     doc["volume"] = volume;
@@ -273,7 +281,6 @@ String local_vars_to_json()
     doc["device_mode"] = device_mode;
     doc["mesh_ttl"] = mesh_ttl;
     doc["ap_safety_timeout_s"] = ap_safety_timeout_s;
-    doc["ap_enabled"] = is_ap_enabled_mode(device_mode);
     doc["ap_runtime_enabled"] = ap_runtime_enabled;
     doc["button_gpio13_track"] = button_gpio13_track;
     doc["button_gpio16_track"] = button_gpio16_track;
@@ -321,6 +328,8 @@ void json_to_local_vars(const uint8_t *data, size_t data_len)
     }
     if (doc.containsKey("auto_play"))
         auto_play = doc["auto_play"].as<const bool>();
+    if (doc.containsKey("allow_play_over_playing"))
+        allow_play_over_playing = doc["allow_play_over_playing"].as<const bool>();
     if (doc.containsKey("note"))
         note = doc["note"].as<String>();
     if (doc.containsKey("udp_port"))
@@ -384,11 +393,6 @@ void json_to_local_vars(const uint8_t *data, size_t data_len)
         if (tmp_mode <= DEVICE_MODE_RELAY_ONLY)
             device_mode = tmp_mode;
     }
-    else if (doc.containsKey("ap_enabled"))
-    {
-        bool ap_enabled = doc["ap_enabled"].as<const bool>();
-        device_mode = ap_enabled ? DEVICE_MODE_CURRENT : DEVICE_MODE_AP_OFF;
-    }
     if (doc.containsKey("mesh_ttl"))
     {
         uint8_t tmp_ttl = doc["mesh_ttl"].as<unsigned int>();
@@ -444,6 +448,7 @@ void load_spiffs()
 
     Serial.printf("SPIFFS loop_file : %s\n", loop_file ? "true" : "false");
     Serial.printf("SPIFFS auto_play : %s\n", auto_play ? "true" : "false");
+    Serial.printf("SPIFFS allow_play_over_playing : %s\n", allow_play_over_playing ? "true" : "false");
     Serial.printf("SPIFFS note : %s\n", note.c_str());
     Serial.printf("SPIFFS udp_port : %d\n", localPort);
     Serial.printf("SPIFFS volume : %d\n", volume);
@@ -553,13 +558,6 @@ void load_json_config_on_sd(const char *filename)
             Serial.println(device_mode);
         }
     }
-    else if (doc.containsKey("ap_enabled"))
-    {
-        bool ap_enabled = doc["ap_enabled"].as<const bool>();
-        device_mode = ap_enabled ? DEVICE_MODE_CURRENT : DEVICE_MODE_AP_OFF;
-        Serial.print("ap_enabled on sd card :");
-        Serial.println(ap_enabled ? "true" : "false");
-    }
     if (doc.containsKey("mesh_ttl"))
     {
         uint8_t tmp_ttl = doc["mesh_ttl"].as<unsigned int>();
@@ -579,6 +577,12 @@ void load_json_config_on_sd(const char *filename)
             Serial.print("ap_safety_timeout_s on sd card :");
             Serial.println(ap_safety_timeout_s);
         }
+    }
+    if (doc.containsKey("allow_play_over_playing"))
+    {
+        allow_play_over_playing = doc["allow_play_over_playing"].as<const bool>();
+        Serial.print("allow_play_over_playing on sd card :");
+        Serial.println(allow_play_over_playing ? "true" : "false");
     }
     if (doc.containsKey("button_gpio13_track"))
     {
@@ -980,6 +984,29 @@ void handle_pending_restart()
 
 void handle_ap_off_safety_timeout()
 {
+    // If safety AP is on, turn it off after the configured duration (e.g. 5 min boot window)
+    if (ap_safety_ap_activated && ap_safety_activated_at_ms != 0)
+    {
+        uint32_t elapsed_ms = (uint32_t)(millis() - ap_safety_activated_at_ms);
+        if (elapsed_ms >= (uint32_t)ap_safety_timeout_s * 1000UL)
+        {
+            Serial.printf("AP safety window ended (%us), disabling AP\n", ap_safety_timeout_s);
+            WiFi.softAPdisconnect(false);
+            ap_safety_ap_activated = false;
+            ap_runtime_enabled = false;
+            ap_ip = "";
+            WiFi.mode(WIFI_STA);
+            WiFi.setSleep(false);
+            esp_err_t channel_result = esp_wifi_set_channel(esp_now_channel, WIFI_SECOND_CHAN_NONE);
+            if (channel_result != ESP_OK)
+            {
+                Serial.printf("Failed to set ESP-NOW channel: %d\n", channel_result);
+            }
+            return;
+        }
+        return;
+    }
+
     if (!esp_now_ready || is_ap_enabled_mode(device_mode) || ap_runtime_enabled || ap_safety_ap_activated)
     {
         return;
@@ -998,12 +1025,18 @@ void handle_ap_off_safety_timeout()
     if (start_soft_ap_runtime())
     {
         ap_safety_ap_activated = true;
+        ap_safety_activated_at_ms = millis();
         update_spiffs();
     }
 }
 
 bool play_track_by_index(uint16_t audio_to_play)
 {
+    if (!allow_play_over_playing && audio.isRunning())
+    {
+        Serial.println("Play ignored: a track is already playing (allow_play_over_playing is false)");
+        return false;
+    }
     if (music_data.size() > audio_to_play)
     {
         String target_path = music_data[audio_to_play].path;
@@ -1539,6 +1572,127 @@ void handleFileUpload(AsyncWebServerRequest *request, String filename, size_t in
     }
 }
 
+bool has_web_serial_provision_marker()
+{
+    return SPIFFS.exists(WEB_SERIAL_PROVISION_STATE_FILE);
+}
+
+void mark_web_serial_provision_done()
+{
+    fs::File marker = SPIFFS.open(WEB_SERIAL_PROVISION_STATE_FILE, "w");
+    if (!marker)
+    {
+        return;
+    }
+    marker.print("done");
+    marker.close();
+}
+
+bool apply_web_serial_config_json(const String &json_payload)
+{
+    DynamicJsonDocument validation_doc(SETTINGS_DOC_CAPACITY);
+    DeserializationError validation_error = deserializeJson(validation_doc, json_payload);
+    if (validation_error)
+    {
+        Serial.printf("WEBCFG:INVALID:%s\n", validation_error.c_str());
+        return false;
+    }
+
+    json_to_local_vars((const uint8_t *)json_payload.c_str(), json_payload.length());
+    sanitize_network_settings();
+    apply_button_input_config();
+    update_spiffs();
+    return true;
+}
+
+void handle_first_boot_serial_provisioning()
+{
+    if (has_web_serial_provision_marker())
+    {
+        return;
+    }
+
+    Serial.println("WEBCFG:WINDOW_START");
+    uint32_t deadline_ms = millis() + WEB_SERIAL_PROVISION_WINDOW_MS;
+    uint32_t last_ready_ms = 0;
+    String serial_line = "";
+    serial_line.reserve(256);
+    bool config_received = false;
+    bool config_changed = false;
+
+    while ((int32_t)(millis() - deadline_ms) < 0)
+    {
+        uint32_t now_ms = millis();
+        if (now_ms - last_ready_ms >= WEB_SERIAL_PROVISION_READY_INTERVAL_MS)
+        {
+            Serial.printf("WEBCFG:READY:%lu\n", (unsigned long)WEB_SERIAL_PROVISION_WINDOW_MS);
+            last_ready_ms = now_ms;
+        }
+
+        while (Serial.available() > 0)
+        {
+            char c = (char)Serial.read();
+            if (c == '\r')
+                continue;
+
+            if (c == '\n')
+            {
+                String received_line = serial_line;
+                serial_line = "";
+                received_line.trim();
+
+                if (!received_line.startsWith(WEB_SERIAL_PROVISION_PREFIX))
+                {
+                    continue;
+                }
+
+                String payload = received_line.substring(strlen(WEB_SERIAL_PROVISION_PREFIX));
+                payload.trim();
+                String previous_json = local_vars_to_json();
+                config_received = apply_web_serial_config_json(payload);
+                if (config_received)
+                {
+                    config_changed = local_vars_to_json() != previous_json;
+                    if (config_changed)
+                    {
+                        Serial.println("WEBCFG:APPLIED");
+                    }
+                    else
+                    {
+                        Serial.println("WEBCFG:NO_CHANGE");
+                    }
+                }
+                break;
+            }
+
+            if (serial_line.length() < WEB_SERIAL_PROVISION_MAX_LINE)
+            {
+                serial_line += c;
+            }
+        }
+
+        if (config_received)
+        {
+            break;
+        }
+        delay(5);
+    }
+
+    mark_web_serial_provision_done();
+    if (config_changed)
+    {
+        delay(120);
+        ESP.restart();
+        return;
+    }
+    if (config_received)
+    {
+        Serial.println("WEBCFG:DONE");
+        return;
+    }
+    Serial.println("WEBCFG:SKIP");
+}
+
 void setup()
 {
     pinMode(SD_CS, OUTPUT);
@@ -1565,6 +1719,7 @@ void setup()
     load_json_config_on_sd("/config.json");
 
     load_spiffs();
+    handle_first_boot_serial_provisioning();
     Serial.printf("JSON : %s/n", local_vars_to_json().c_str());
 
     uint64_t chip_id = ESP.getEfuseMac();
@@ -1585,14 +1740,24 @@ void setup()
     }
     else
     {
-        WiFi.mode(WIFI_STA);
-        WiFi.setSleep(false);
-        ap_runtime_enabled = false;
-        ap_ip = "";
-        esp_err_t channel_result = esp_wifi_set_channel(esp_now_channel, WIFI_SECOND_CHAN_NONE);
-        if (channel_result != ESP_OK)
+        // AP-off mode: optionally start AP at boot for ap_safety_timeout_s (e.g. 5 min) so user can connect
+        if (ap_safety_timeout_s > 0 && start_soft_ap_runtime())
         {
-            Serial.printf("Failed to set ESP-NOW channel: %d\n", channel_result);
+            ap_safety_ap_activated = true;
+            ap_safety_activated_at_ms = millis();
+            Serial.printf("AP safety window started at boot (%us)\n", ap_safety_timeout_s);
+        }
+        else
+        {
+            WiFi.mode(WIFI_STA);
+            WiFi.setSleep(false);
+            ap_runtime_enabled = false;
+            ap_ip = "";
+            esp_err_t channel_result = esp_wifi_set_channel(esp_now_channel, WIFI_SECOND_CHAN_NONE);
+            if (channel_result != ESP_OK)
+            {
+                Serial.printf("Failed to set ESP-NOW channel: %d\n", channel_result);
+            }
         }
     }
     digitalWrite(2, 0);
@@ -1602,6 +1767,7 @@ void setup()
     {
         Serial.printf("Device mode: %u\n", device_mode);
         Serial.printf("AP SSID: %s\n", ap_ssid.c_str());
+        Serial.printf("AP Password: %s\n", ap_password.c_str());
         Serial.printf("AP IP: %s\n", ap_ip.c_str());
         Serial.printf("ESP-NOW channel: %u\n", esp_now_channel);
         Serial.printf("Mesh TTL: %u\n", mesh_ttl);

@@ -51,7 +51,7 @@ export interface Data {
   device_mode?: number;
   mesh_ttl?: number;
   ap_safety_timeout_s?: number;
-  ap_enabled?: boolean;
+  allow_play_over_playing?: boolean;
   ap_runtime_enabled?: boolean;
   button_gpio13_track?: number;
   button_gpio16_track?: number;
@@ -76,6 +76,7 @@ function App() {
   const [errorKey, setErrorKey] = useState<string | null>(null);
   const [connectionState, setConnectionState] = useState<ConnectionState>("checking");
   const healthCheckInFlightRef = useRef(false);
+  const dataFetchInFlightRef = useRef(false);
   const previousConnectionStateRef = useRef<ConnectionState>("checking");
   const wifiName = data?.ap_ssid?.trim() ? data.ap_ssid : t("App.unavailable");
   const connectionStatusLabel =
@@ -87,27 +88,46 @@ function App() {
   const connectionStatusColor =
     connectionState === "online" ? "green" : connectionState === "offline" ? "red" : "gray";
 
-  const fetchData = async () => {
-    setErrorKey(null);
-    try {
-      const response = await fetch("/data");
-      console.log("Response :", response);
-      if (response.ok) {
-        const responseData: Data = await response.json();
-        setData(responseData);
-        console.log("Fetched data :", responseData);
-      } else {
-        setErrorKey("App.errorLoadData");
-        setConnectionState("offline");
+  const fetchData = useCallback(
+    async (silent = false, updateConnectionState = true) => {
+      if (dataFetchInFlightRef.current) {
+        return;
       }
-    } catch (error) {
-      console.error("Error fetching sensor data", error);
-      setErrorKey("App.errorReachDevice");
-      setConnectionState("offline");
-    } finally {
-      setIsLoading(false);
-    }
-  };
+      dataFetchInFlightRef.current = true;
+      if (!silent) {
+        setErrorKey(null);
+      }
+      try {
+        const response = await fetch(`/data?ts=${Date.now()}`, { cache: "no-store" });
+        if (response.ok) {
+          const responseData: Data = await response.json();
+          setData(responseData);
+          if (updateConnectionState) {
+            setConnectionState("online");
+          }
+        } else {
+          if (!silent) {
+            setErrorKey("App.errorLoadData");
+          }
+          if (updateConnectionState) {
+            setConnectionState("offline");
+          }
+        }
+      } catch (error) {
+        console.error("Error fetching sensor data", error);
+        if (!silent) {
+          setErrorKey("App.errorReachDevice");
+        }
+        if (updateConnectionState) {
+          setConnectionState("offline");
+        }
+      } finally {
+        setIsLoading(false);
+        dataFetchInFlightRef.current = false;
+      }
+    },
+    []
+  );
 
   const checkServerHealth = useCallback(async () => {
     if (healthCheckInFlightRef.current) {
@@ -141,7 +161,7 @@ function App() {
 
   useEffect(() => {
     void fetchData();
-  }, []);
+  }, [fetchData]);
 
   useEffect(() => {
     void checkServerHealth();
@@ -150,6 +170,16 @@ function App() {
     }, 3000);
     return () => window.clearInterval(intervalId);
   }, [checkServerHealth]);
+
+  useEffect(() => {
+    if (connectionState !== "online") {
+      return;
+    }
+    const intervalId = window.setInterval(() => {
+      void fetchData(true, false);
+    }, 3000);
+    return () => window.clearInterval(intervalId);
+  }, [connectionState, fetchData]);
 
   useEffect(() => {
     const previousState = previousConnectionStateRef.current;
@@ -172,7 +202,7 @@ function App() {
         title: t("App.connectionRestoredTitle"),
         message: t("App.connectionRestoredMessage"),
       });
-      void fetchData();
+      void fetchData(false, false);
     }
     previousConnectionStateRef.current = connectionState;
   }, [connectionState, t]);
