@@ -11,45 +11,54 @@ import { Notifications } from "@mantine/notifications";
 import "./i18n";
 import { useColorScheme } from "@mantine/hooks";
 
-// ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
-//   <React.StrictMode>
-//     <ColorSchemeProvider
-//       colorScheme={colorScheme}
-//       toggleColorScheme={toggleColorScheme}
-//     >
-//       <MantineProvider withNormalizeCSS withGlobalStyles>
-//         <Notifications />
-//         <App />
-//       </MantineProvider>
-//     </ColorSchemeProvider>
-//   </React.StrictMode>
-// );
-
-// import React, { useState } from 'react';
-// import ReactDOM from 'react-dom';
-// import App from './App';
-// import './index.css';
-// import { ColorSchemeProvider, MantineProvider } from '@mantine/core';
-// import { Notifications } from '@mantine/notifications';
-// import './i18n';
-
 function Providers() {
-  // hook will return either 'dark' or 'light' on client
-  // and always 'light' during ssr as window.matchMedia is not available
   const preferredColorScheme = useColorScheme();
-  const [colorScheme, setColorScheme] = useState<ColorScheme>(preferredColorScheme);
+  const [colorScheme, setColorScheme] = useState<ColorScheme>(
+    (localStorage.getItem("color-scheme") as ColorScheme) || preferredColorScheme
+  );
+
   const toggleColorScheme = (value?: ColorScheme) => {
-    console.log("color scheme :", value)
-    setColorScheme(value || (colorScheme === 'dark' ? 'light' : 'dark'));
-  }
-  console.log("color scheme 2 :", colorScheme)
+    const nextColorScheme = value || (colorScheme === "dark" ? "light" : "dark");
+    setColorScheme(nextColorScheme);
+    localStorage.setItem("color-scheme", nextColorScheme);
+  };
 
   return (
     <ColorSchemeProvider
       colorScheme={colorScheme}
       toggleColorScheme={toggleColorScheme}
     >
-      <MantineProvider withNormalizeCSS withGlobalStyles>
+      <MantineProvider
+        withNormalizeCSS
+        withGlobalStyles
+        theme={{
+          colorScheme,
+          primaryColor: "cyan",
+          primaryShade: { light: 6, dark: 5 },
+          defaultRadius: "md",
+          colors: {
+            dark: [
+              "#C9D1D9",
+              "#AEB8C2",
+              "#8B96A3",
+              "#657183",
+              "#4A5568",
+              "#2D3748",
+              "#1F2937",
+              "#161E2E",
+              "#111827",
+              "#0B1220",
+            ],
+          },
+          components: {
+            Paper: {
+              defaultProps: {
+                radius: "md",
+              },
+            },
+          },
+        }}
+      >
         <Notifications />
         <App />
       </MantineProvider>

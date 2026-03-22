@@ -5,61 +5,66 @@ import {
   Box,
   Button,
   Group,
-  List,
   Progress,
+  ScrollArea,
   Table,
+  Title,
   useMantineTheme,
   Badge,
 } from "@mantine/core";
 import { IconCheck, IconPhoto, IconUpload, IconX } from "@tabler/icons-react";
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { notifications } from "@mantine/notifications";
 import { useTranslation } from "react-i18next";
-
-import { parseFile } from "music-metadata";
-// import { inspect } from 'util';
+import { useMediaQuery } from "@mantine/hooks";
+import type { TFunction } from "i18next";
 
 interface UploadFileProps {
   data?: Data;
   fetchData: () => Promise<void>;
 }
 
-function formatFileSize(file: File): string {
+function formatFileSize(file: File, t: TFunction): string {
   const fileSize = file.size;
   const kiloByte = 1024;
   const megaByte = kiloByte * 1024;
   const gigaByte = megaByte * 1024;
 
   if (fileSize < kiloByte) {
-    return `${fileSize} Bytes`;
+    return `${fileSize} ${t("UploadFile.fileSizeBytes")}`;
   } else if (fileSize < megaByte) {
     const sizeInKB = (fileSize / kiloByte).toFixed(2);
-    return `${sizeInKB} KB`;
+    return `${sizeInKB} ${t("UploadFile.fileSizeKB")}`;
   } else if (fileSize < gigaByte) {
     const sizeInMB = (fileSize / megaByte).toFixed(2);
-    return `${sizeInMB} MB`;
+    return `${sizeInMB} ${t("UploadFile.fileSizeMB")}`;
   } else {
     const sizeInGB = (fileSize / gigaByte).toFixed(2);
-    return `${sizeInGB} GB`;
+    return `${sizeInGB} ${t("UploadFile.fileSizeGB")}`;
   }
 }
 
 export const UploadFile = ({
-  data,
   fetchData,
 }: UploadFileProps): JSX.Element => {
   const openRef = useRef<() => void>(null);
   const [files, setFiles] = useState<File[]>([]);
   const theme = useMantineTheme();
+  const isMobile = useMediaQuery("(max-width: 768px)");
   const uploadStartTime = useRef<Date | null>(null);
 
   const [uploadEstimatedTime, setUploadEstimatedTime] =
     useState<String | null>();
   const [uploadProgress, setUploadProgress] = useState(0);
   const [uploadState, setUploadState] = useState<
-    "failed" | "uploading" | "done"
-  >("uploading");
-  const uploadColors = { failed: "red", uploading: "blue", done: "green" };
+    "idle" | "failed" | "uploading" | "done"
+  >("idle");
+  const uploadColors = {
+    idle: "gray",
+    failed: "red",
+    uploading: "blue",
+    done: "green",
+  };
   const { t } = useTranslation();
 
   const handleFileDownload = (file: File) => {
@@ -97,7 +102,7 @@ export const UploadFile = ({
             withBorder: true,
             autoClose: 3000,
             color: "green",
-            title: `Fichier uploadé.`,
+            title: t("UploadFile.uploadSuccess"),
             message: "",
           });
           setFiles([]);
@@ -110,7 +115,7 @@ export const UploadFile = ({
             withBorder: true,
             autoClose: 5000,
             color: "red",
-            title: `Erreur lors de l'upload du fichier.`,
+            title: t("UploadFile.uploadFailed"),
             message: "",
           });
         }
@@ -156,6 +161,14 @@ export const UploadFile = ({
 
   return (
     <>
+      <Group position="apart" mb="sm">
+        <Title order={4}>{t("UploadFile.uploadSection")}</Title>
+        {files.length > 0 && (
+          <Text size="sm" c="dimmed">
+            {t("UploadFile.selectedCount", { count: files.length })}
+          </Text>
+        )}
+      </Group>
       <Dropzone
         h={200}
         multiple={false}
@@ -163,6 +176,9 @@ export const UploadFile = ({
         onDrop={(files) => {
           console.log("accepted files", files);
           setFiles(files);
+          setUploadProgress(0);
+          setUploadEstimatedTime(null);
+          setUploadState("idle");
         }}
         onReject={(files) => console.log("rejected files", files)}
         styles={{ inner: { height: "100%" } }}
@@ -215,42 +231,56 @@ export const UploadFile = ({
         </Button>
       </Group>
 
-      <Table>
-        <thead>
-          <tr>
-            <th>{t("UploadFile.fileToImport")}</th>
-            <th>{t("UploadFile.size")}</th>
-            <th>{t("UploadFile.downloadOnComputer")}</th>
-          </tr>
-        </thead>
-        <tbody>
-          {files.map((file, index) => (
-            <tr key={index}>
-              <td>{file.name}</td>
-              <td>{formatFileSize(file)}</td>
-              <td>
-                <Badge
-                  onClick={() => handleFileDownload(file)}
-                  style={{ cursor: "pointer" }}
-                >
-                  {t("UploadFile.download")}
-                </Badge>
-              </td>
+      <ScrollArea mt="md">
+        <Table striped withBorder>
+          <thead>
+            <tr>
+              <th>{t("UploadFile.fileToImport")}</th>
+              <th>{t("UploadFile.size")}</th>
+              <th>{t("UploadFile.downloadOnComputer")}</th>
             </tr>
-          ))}
-        </tbody>
-      </Table>
+          </thead>
+          <tbody>
+            {files.map((file, index) => (
+              <tr key={index}>
+                <td>{file.name}</td>
+                <td>{formatFileSize(file, t)}</td>
+                <td>
+                  <Badge
+                    variant="light"
+                    onClick={() => handleFileDownload(file)}
+                    style={{ cursor: "pointer" }}
+                  >
+                    {t("UploadFile.download")}
+                  </Badge>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </Table>
+      </ScrollArea>
 
-      <Button onClick={() => sendFile()}>{t("UploadFile.sendFile")}</Button>
-      <Progress
-        m={5}
-        radius={"xl"}
-        size={24}
-        value={uploadProgress}
-        label={uploadProgress.toFixed(2) + "%"}
-        color={uploadColors[uploadState]}
-      />
-      <Text>{uploadEstimatedTime}</Text>
+      <Button
+        mt="md"
+        fullWidth={isMobile}
+        disabled={files.length === 0 || uploadState === "uploading"}
+        onClick={() => sendFile()}
+      >
+        {t("UploadFile.sendFile")}
+      </Button>
+      {(uploadProgress > 0 || uploadState === "uploading") && (
+        <Progress
+          mt="sm"
+          radius={"xl"}
+          size={24}
+          value={uploadProgress}
+          label={uploadProgress.toFixed(2) + "%"}
+          color={uploadColors[uploadState]}
+        />
+      )}
+      <Text mt="xs" size="sm" c="dimmed">
+        {uploadEstimatedTime}
+      </Text>
     </>
   );
 };
