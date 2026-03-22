@@ -588,7 +588,7 @@ static void startBtMode()
     a2dp.set_on_audio_state_changed(&callbackaudio);
     a2dp.set_on_connection_state_changed(onBluetoothConnect2);
     a2dp.set_auto_reconnect(true);
-    a2dp.start("Enceinte Cuisine");
+    a2dp.start("Jukebox 0x54");
     a2dp.set_volume(current_volume * 8 + 15);
 #ifdef INCLUDE_PROMPTS
     readSound(bike_groove_on_wav, bike_groove_on_wav_len);
@@ -1219,15 +1219,7 @@ void setup()
       pcfPrevValue = initValue;
     }
 
-    // Skip PCF queue in BT-only mode
-
-    if (!SD.begin(SD_CS))
-    {
-        Serial.println("SD initialization failed!");
-        while (1)
-            ;
-    }
-    Serial.println("SD initialization done.");
+    // Initialize SPIFFS first to get persisted bt_mode and settings
     if (!SPIFFS.begin())
     {
         Serial.println("SPIFFS initialization failed !");
@@ -1236,10 +1228,20 @@ void setup()
         // return;
     }
     Serial.println("SPIFFS initialization done.");
-    load_json_config_on_sd("/config.json");
-
     load_spiffs();
     Serial.printf("JSON : %s/n", local_vars_to_json().c_str());
+    // Initialize and use SD only when not in BT mode
+    if (!bt_mode)
+    {
+        if (!SD.begin(SD_CS))
+        {
+            Serial.println("SD initialization failed!");
+            while (1)
+                ;
+        }
+        Serial.println("SD initialization done.");
+        load_json_config_on_sd("/config.json");
+    }
     if (!bt_mode)
     {
         WiFi.mode(WIFI_AP);
@@ -1295,10 +1297,11 @@ void setup()
         server.onNotFound(handleRequest);
 
         server.begin();
+        // Build files list from SD for web UI/control
+        update_music_from_sd();
     }
 
     audio.setPinout(I2S_BCLK, I2S_LRC, I2S_DOUT);
-    update_music_from_sd();
     // printf("test : %s\n", files_list[1].c_str());
     if (auto_play && !bt_mode)
     {
@@ -1316,6 +1319,8 @@ void setup()
     audio.setVolume(volume);
     // Initialize balance to center on boot
     currentBalance = 0;
+    // audio.setTone(-10, 0, -6);
+    audio.setTone(10, -10, -10);
     audio.setBalance(currentBalance);
     // Start BT audio at the very end if requested
     if (bt_mode)
@@ -1326,7 +1331,6 @@ void setup()
 
 bool need_to_play = true;
 
-uint16_t current_Volume = 4095;
 char packetBuffer[255]; // Incoming
 
 // Méthode pour découper le message avec un séparateur (ou "parser")
