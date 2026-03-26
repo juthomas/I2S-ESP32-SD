@@ -79,11 +79,11 @@ export const Settings = ({ data, fetchData }: SettingsProps): JSX.Element => {
   });
 
   useEffect(() => {
-    if (!opened || isEditing) {
+    if (opened) {
       return;
     }
     applyDataToForm(data);
-  }, [data, opened, isEditing]);
+  }, [data, opened]);
 
   const modeValue = String(form.values.device_mode ?? 0);
   const apDisabledMode = modeValue === "2" || modeValue === "3";
