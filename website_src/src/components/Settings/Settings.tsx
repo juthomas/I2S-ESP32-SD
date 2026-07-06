@@ -48,6 +48,12 @@ export const Settings = ({ data, fetchData }: SettingsProps): JSX.Element => {
     ap_ssid: sourceData?.ap_ssid,
     ap_password: sourceData?.ap_password,
     ap_ip_config: sourceData?.ap_ip_config,
+    sta_ssid: sourceData?.sta_ssid ?? "",
+    sta_password: sourceData?.sta_password ?? "",
+    sta_use_dhcp: sourceData?.sta_use_dhcp ?? true,
+    sta_ip_config: sourceData?.sta_ip_config ?? "",
+    sta_gateway_config: sourceData?.sta_gateway_config ?? "",
+    sta_subnet_config: sourceData?.sta_subnet_config ?? "255.255.255.0",
     esp_now_channel: sourceData?.esp_now_channel,
     device_mode: sourceData?.device_mode ?? 0,
     mesh_ttl: sourceData?.mesh_ttl ?? 3,
@@ -87,9 +93,11 @@ export const Settings = ({ data, fetchData }: SettingsProps): JSX.Element => {
 
   const modeValue = String(form.values.device_mode ?? 0);
   const apDisabledMode = modeValue === "2" || modeValue === "3";
+  const staClientMode = modeValue === "4";
   const meshTtlDisabled = modeValue !== "1";
   const currentApSsid = data?.ap_ssid?.trim() ? data.ap_ssid : "-";
   const currentApIp = data?.ap_ip?.trim() ? data.ap_ip : "-";
+  const currentStaIp = data?.sta_ip?.trim() ? data.sta_ip : "-";
 
   const triggerPhysicalButton = async (gpio: number) => {
     setSimulatingButton(gpio);
@@ -228,6 +236,7 @@ export const Settings = ({ data, fetchData }: SettingsProps): JSX.Element => {
                   { value: "1", label: String(t("Parameters.modeMesh")) },
                   { value: "2", label: String(t("Parameters.modeApOff")) },
                   { value: "3", label: String(t("Parameters.modeRelayOnly")) },
+                  { value: "4", label: String(t("Parameters.modeApStaClient")) },
                 ]}
                 value={modeValue}
                 onChange={(value) => form.setFieldValue("device_mode", Number(value ?? 0))}
@@ -297,6 +306,55 @@ export const Settings = ({ data, fetchData }: SettingsProps): JSX.Element => {
                 min={1}
                 {...form.getInputProps("esp_now_channel")}
               />
+              {staClientMode && (
+                <>
+                  <TextInput
+                    mt="md"
+                    label={t("Parameters.staSsid")}
+                    placeholder="MonRouteur"
+                    {...form.getInputProps("sta_ssid")}
+                  />
+                  <TextInput
+                    mt="md"
+                    label={t("Parameters.staPassword")}
+                    type="password"
+                    placeholder={String(t("Parameters.staPasswordPlaceholder"))}
+                    {...form.getInputProps("sta_password")}
+                  />
+                  <Switch
+                    mt="md"
+                    labelPosition="left"
+                    label={t("Parameters.staUseDhcp")}
+                    {...form.getInputProps("sta_use_dhcp", { type: "checkbox" })}
+                  />
+                  <TextInput
+                    mt="md"
+                    label={t("Parameters.staIpConfig")}
+                    placeholder="192.168.1.50"
+                    disabled={form.values.sta_use_dhcp}
+                    {...form.getInputProps("sta_ip_config")}
+                  />
+                  <TextInput
+                    mt="md"
+                    label={t("Parameters.staGateway")}
+                    placeholder="192.168.1.1"
+                    disabled={form.values.sta_use_dhcp}
+                    {...form.getInputProps("sta_gateway_config")}
+                  />
+                  <TextInput
+                    mt="md"
+                    label={t("Parameters.staSubnet")}
+                    placeholder="255.255.255.0"
+                    disabled={form.values.sta_use_dhcp}
+                    {...form.getInputProps("sta_subnet_config")}
+                  />
+                  <Text size="sm" c="dimmed" mt="xs">
+                    {data?.sta_connected
+                      ? t("Parameters.staConnected", { ip: currentStaIp })
+                      : t("Parameters.staNotConnected")}
+                  </Text>
+                </>
+              )}
               <Text size="sm" c="dimmed" mt="xs">
                 {data?.ap_runtime_enabled
                   ? t("Parameters.apRuntimeOn")

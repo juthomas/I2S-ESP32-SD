@@ -28,9 +28,14 @@
 // le premier nombre est le gain pour les graves,
 // le deuxieme pour les médiums et le troisieme pour les aigus,
 // le gain va de -40 à 6 (en dB)
+//
+// Stream : "S http://host:port/path" pour lancer un flux HTTP (MP3/AAC)
+// Stop : "X" pour arreter la lecture en cours
+// Discovery : "?" pour recevoir un JSON de decouverte en UDP
 
 #include "Arduino.h"
 #include "WiFi.h"
+#include <ESPmDNS.h>
 #include "jsonParser.h"
 #include "ESPAsyncWebServer.h"
 #include "Audio.h"
@@ -104,12 +109,13 @@ const uint8_t DEVICE_MODE_CURRENT = 0;
 const uint8_t DEVICE_MODE_MESH = 1;
 const uint8_t DEVICE_MODE_AP_OFF = 2;
 const uint8_t DEVICE_MODE_RELAY_ONLY = 3;
+const uint8_t DEVICE_MODE_AP_STA_CLIENT = 4;
 const uint8_t MESH_DEFAULT_TTL = 3;
 const uint8_t MESH_MAX_TTL = 8;
 const uint8_t MESH_SEEN_CACHE_SIZE = 32;
 const uint16_t AP_SAFETY_TIMEOUT_DEFAULT_S = 300;
 const uint16_t AP_SAFETY_TIMEOUT_MAX_S = 3600;
-const size_t SETTINGS_DOC_CAPACITY = 4096;
+const size_t SETTINGS_DOC_CAPACITY = 6144;
 const char *WEB_SERIAL_PROVISION_STATE_FILE = "/.webcfg.done";
 const char *WEB_SERIAL_PROVISION_PREFIX = "WEBCFG:";
 const uint32_t WEB_SERIAL_PROVISION_WINDOW_MS = 10000;
@@ -121,6 +127,14 @@ String ap_ssid = "";
 String ap_password = "12345678";
 String ap_ip = "";
 String ap_ip_config = "192.168.4.1";
+String sta_ssid = "";
+String sta_password = "";
+String sta_ip = "";
+String sta_ip_config = "";
+String sta_gateway_config = "";
+String sta_subnet_config = "255.255.255.0";
+bool sta_use_dhcp = true;
+bool sta_connected = false;
 uint8_t esp_now_channel = 6;
 uint8_t device_mode = DEVICE_MODE_CURRENT;
 uint8_t mesh_ttl = MESH_DEFAULT_TTL;
@@ -222,9 +236,18 @@ String note = "";
 uint8_t volume = 60;
 std::vector<t_music_data> music_data;
 std::vector<String> files_list;
+enum AudioSource : uint8_t
+{
+    AUDIO_SOURCE_NONE = 0,
+    AUDIO_SOURCE_SD = 1,
+    AUDIO_SOURCE_STREAM = 2,
+};
+
 Audio audio;
 WiFiUDP udp;
 AsyncWebServer server(80);
+AudioSource audioSource = AUDIO_SOURCE_NONE;
+String stream_url = "";
 static const uint8_t NEO_PIN = LED_IO4;
 static const uint16_t NEO_COUNT = 4;
 static Adafruit_NeoPixel strip(NEO_COUNT, NEO_PIN, NEO_GRB + NEO_KHZ800);
@@ -510,6 +533,14 @@ String local_vars_to_json()
     doc["ap_name"] = ap_name;
     doc["ap_password"] = ap_password;
     doc["ap_ip_config"] = ap_ip_config;
+    doc["sta_ssid"] = sta_ssid;
+    doc["sta_password"] = sta_password;
+    doc["sta_use_dhcp"] = sta_use_dhcp;
+    doc["sta_ip_config"] = sta_ip_config;
+    doc["sta_gateway_config"] = sta_gateway_config;
+    doc["sta_subnet_config"] = sta_subnet_config;
+    doc["sta_ip"] = sta_ip;
+    doc["sta_connected"] = sta_connected;
     doc["esp_now_channel"] = esp_now_channel;
     doc["device_mode"] = device_mode;
     doc["mesh_ttl"] = mesh_ttl;
@@ -692,9 +723,21 @@ void json_to_local_vars(const uint8_t *data, size_t data_len)
     if (doc.containsKey("device_mode"))
     {
         uint8_t tmp_mode = doc["device_mode"].as<unsigned int>();
-        if (tmp_mode <= DEVICE_MODE_RELAY_ONLY)
+        if (tmp_mode <= DEVICE_MODE_AP_STA_CLIENT)
             device_mode = tmp_mode;
     }
+    if (doc.containsKey("sta_ssid"))
+        sta_ssid = doc["sta_ssid"].as<String>();
+    if (doc.containsKey("sta_password"))
+        sta_password = doc["sta_password"].as<String>();
+    if (doc.containsKey("sta_use_dhcp"))
+        sta_use_dhcp = doc["sta_use_dhcp"].as<const bool>();
+    if (doc.containsKey("sta_ip_config"))
+        sta_ip_config = doc["sta_ip_config"].as<String>();
+    if (doc.containsKey("sta_gateway_config"))
+        sta_gateway_config = doc["sta_gateway_config"].as<String>();
+    if (doc.containsKey("sta_subnet_config"))
+        sta_subnet_config = doc["sta_subnet_config"].as<String>();
     if (doc.containsKey("mesh_ttl"))
     {
         uint8_t tmp_ttl = doc["mesh_ttl"].as<unsigned int>();
@@ -759,6 +802,8 @@ void load_spiffs()
     Serial.printf("SPIFFS ap_ip_config : %s\n", ap_ip_config.c_str());
     Serial.printf("SPIFFS esp_now_channel : %u\n", esp_now_channel);
     Serial.printf("SPIFFS device_mode : %u\n", device_mode);
+    Serial.printf("SPIFFS sta_ssid : %s\n", sta_ssid.c_str());
+    Serial.printf("SPIFFS sta_use_dhcp : %s\n", sta_use_dhcp ? "true" : "false");
     Serial.printf("SPIFFS mesh_ttl : %u\n", mesh_ttl);
     Serial.printf("SPIFFS ap_safety_timeout_s : %u\n", ap_safety_timeout_s);
     Serial.printf("SPIFFS button_gpio13_track : %d\n", button_gpio13_track);
@@ -855,12 +900,46 @@ void load_json_config_on_sd(const char *filename)
     if (doc.containsKey("device_mode"))
     {
         uint8_t tmp_mode = doc["device_mode"].as<unsigned int>();
-        if (tmp_mode <= DEVICE_MODE_RELAY_ONLY)
+        if (tmp_mode <= DEVICE_MODE_AP_STA_CLIENT)
         {
             device_mode = tmp_mode;
             Serial.print("device_mode on sd card :");
             Serial.println(device_mode);
         }
+    }
+    if (doc.containsKey("sta_ssid"))
+    {
+        sta_ssid = doc["sta_ssid"].as<String>();
+        Serial.print("sta_ssid on sd card :");
+        Serial.println(sta_ssid);
+    }
+    if (doc.containsKey("sta_password"))
+    {
+        sta_password = doc["sta_password"].as<String>();
+        Serial.println("sta_password on sd card : (set)");
+    }
+    if (doc.containsKey("sta_use_dhcp"))
+    {
+        sta_use_dhcp = doc["sta_use_dhcp"].as<const bool>();
+        Serial.printf("sta_use_dhcp on sd card : %s\n", sta_use_dhcp ? "true" : "false");
+    }
+    if (doc.containsKey("sta_ip_config"))
+    {
+        sta_ip_config = doc["sta_ip_config"].as<String>();
+        Serial.print("sta_ip_config on sd card :");
+        Serial.println(sta_ip_config);
+    }
+    if (doc.containsKey("sta_gateway_config"))
+    {
+        sta_gateway_config = doc["sta_gateway_config"].as<String>();
+        Serial.print("sta_gateway_config on sd card :");
+        Serial.println(sta_gateway_config);
+    }
+    if (doc.containsKey("sta_subnet_config"))
+    {
+        sta_subnet_config = doc["sta_subnet_config"].as<String>();
+        Serial.print("sta_subnet_config on sd card :");
+        Serial.println(sta_subnet_config);
     }
     if (doc.containsKey("mesh_ttl"))
     {
@@ -1165,7 +1244,7 @@ bool parse_ipv4_string(const String &ip_value, IPAddress &parsed_ip)
 
 bool is_ap_enabled_mode(uint8_t mode)
 {
-    return mode == DEVICE_MODE_CURRENT || mode == DEVICE_MODE_MESH;
+    return mode == DEVICE_MODE_CURRENT || mode == DEVICE_MODE_MESH || mode == DEVICE_MODE_AP_STA_CLIENT;
 }
 
 bool is_mesh_mode(uint8_t mode)
@@ -1202,6 +1281,77 @@ bool start_soft_ap_runtime()
     ap_ip = WiFi.softAPIP().toString();
     ap_runtime_enabled = true;
     return true;
+}
+
+bool connect_wifi_sta_runtime(uint16_t timeout_ms = 15000)
+{
+    sta_ssid.trim();
+    if (sta_ssid.length() == 0)
+    {
+        sta_connected = false;
+        sta_ip = "";
+        Serial.println("STA SSID is empty, skipping router connection");
+        return false;
+    }
+    if (sta_ssid.length() > 31)
+    {
+        sta_ssid = sta_ssid.substring(0, 31);
+    }
+
+    WiFi.mode(WIFI_AP_STA);
+    WiFi.setSleep(false);
+
+    if (!sta_use_dhcp)
+    {
+        IPAddress sta_ip_addr;
+        IPAddress sta_gateway;
+        IPAddress sta_subnet;
+        if (!parse_ipv4_string(sta_ip_config, sta_ip_addr) ||
+            !parse_ipv4_string(sta_gateway_config, sta_gateway) ||
+            !parse_ipv4_string(sta_subnet_config, sta_subnet))
+        {
+            Serial.println("Invalid static STA IP config, falling back to DHCP");
+            sta_use_dhcp = true;
+        }
+        else
+        {
+            WiFi.config(sta_ip_addr, sta_gateway, sta_subnet);
+        }
+    }
+
+    Serial.printf("Connecting STA to \"%s\"...\n", sta_ssid.c_str());
+    WiFi.begin(sta_ssid.c_str(), sta_password.c_str());
+
+    uint32_t start_ms = millis();
+    while (WiFi.status() != WL_CONNECTED && (uint32_t)(millis() - start_ms) < timeout_ms)
+    {
+        delay(250);
+        Serial.print(".");
+    }
+    Serial.println();
+
+    if (WiFi.status() == WL_CONNECTED)
+    {
+        sta_connected = true;
+        sta_ip = WiFi.localIP().toString();
+        uint8_t router_channel = WiFi.channel();
+        if (router_channel >= 1 && router_channel <= 13)
+        {
+            esp_now_channel = router_channel;
+            esp_err_t channel_result = esp_wifi_set_channel(esp_now_channel, WIFI_SECOND_CHAN_NONE);
+            if (channel_result != ESP_OK)
+            {
+                Serial.printf("Failed to sync ESP-NOW channel to STA: %d\n", channel_result);
+            }
+        }
+        Serial.printf("STA connected, IP: %s, channel: %u\n", sta_ip.c_str(), esp_now_channel);
+        return true;
+    }
+
+    sta_connected = false;
+    sta_ip = "";
+    Serial.println("STA connection failed (AP remains active)");
+    return false;
 }
 
 uint32_t generate_esp_now_message_id()
@@ -1246,9 +1396,31 @@ void sanitize_network_settings()
         ap_name = "I2S-SD-DEFAULT";
     }
 
-    if (device_mode > DEVICE_MODE_RELAY_ONLY)
+    if (device_mode > DEVICE_MODE_AP_STA_CLIENT)
     {
         device_mode = DEVICE_MODE_CURRENT;
+    }
+
+    sta_ssid.trim();
+    if (sta_ssid.length() > 31)
+    {
+        sta_ssid = sta_ssid.substring(0, 31);
+    }
+    sta_password.trim();
+    if (sta_password.length() > 63)
+    {
+        sta_password = sta_password.substring(0, 63);
+    }
+    sta_ip_config.trim();
+    sta_gateway_config.trim();
+    sta_subnet_config.trim();
+    if (sta_subnet_config.length() == 0)
+    {
+        sta_subnet_config = "255.255.255.0";
+    }
+    if (device_mode == DEVICE_MODE_AP_STA_CLIENT && sta_ssid.length() == 0)
+    {
+        Serial.println("Warning: device_mode 4 requires sta_ssid to connect to router");
     }
 
     if (mesh_ttl < 1 || mesh_ttl > MESH_MAX_TTL)
@@ -1325,6 +1497,18 @@ void sanitize_network_settings()
         Serial.println("Invalid AP IP, fallback to 192.168.4.1");
         ap_ip_config = "192.168.4.1";
     }
+
+    if (!sta_use_dhcp && device_mode == DEVICE_MODE_AP_STA_CLIENT)
+    {
+        IPAddress tmp;
+        if (!parse_ipv4_string(sta_ip_config, tmp) ||
+            !parse_ipv4_string(sta_gateway_config, tmp) ||
+            !parse_ipv4_string(sta_subnet_config, tmp))
+        {
+            Serial.println("Invalid STA static IP settings, enabling DHCP");
+            sta_use_dhcp = true;
+        }
+    }
 }
 
 void schedule_restart(uint32_t delay_ms)
@@ -1395,6 +1579,119 @@ void handle_ap_off_safety_timeout()
     }
 }
 
+void stop_playback()
+{
+    audio.stopSong();
+    audioSource = AUDIO_SOURCE_NONE;
+    stream_url = "";
+    Serial.println("Playback stopped");
+}
+
+bool play_stream_by_url(const String &url)
+{
+    if (url.length() == 0)
+    {
+        Serial.println("Stream URL is empty");
+        return false;
+    }
+    if (!allow_play_over_playing && audio.isRunning())
+    {
+        Serial.println("Stream ignored: audio already playing (allow_play_over_playing is false)");
+        return false;
+    }
+    Serial.printf("Streaming: %s\n", url.c_str());
+    audio.setFileLoop(false);
+    bool ok = audio.connecttohost(url.c_str());
+    if (ok)
+    {
+        audioSource = AUDIO_SOURCE_STREAM;
+        stream_url = url;
+    }
+    else
+    {
+        Serial.println("connecttohost failed");
+    }
+    return ok;
+}
+
+String stream_status_json()
+{
+    const char *source = "none";
+    if (audioSource == AUDIO_SOURCE_SD)
+        source = "sd";
+    else if (audioSource == AUDIO_SOURCE_STREAM)
+        source = "stream";
+
+    DynamicJsonDocument doc(512);
+    doc["source"] = source;
+    doc["running"] = audio.isRunning();
+    doc["url"] = stream_url;
+    doc["firmware"] = "1.3-wifi-stream";
+    doc["device_id"] = device_id;
+    doc["ap_name"] = ap_name;
+    doc["udp_port"] = localPort;
+    String out;
+    serializeJson(doc, out);
+    return out;
+}
+
+void send_udp_discovery_response()
+{
+    IPAddress local_ip;
+    if (sta_connected && sta_ip.length() > 0)
+    {
+        local_ip.fromString(sta_ip);
+    }
+    else
+    {
+        local_ip = WiFi.softAPIP();
+        if (local_ip == IPAddress(0, 0, 0, 0))
+            local_ip = WiFi.localIP();
+    }
+
+    DynamicJsonDocument doc(384);
+    doc["ap_name"] = ap_name;
+    doc["device_id"] = device_id;
+    doc["ip"] = local_ip.toString();
+    doc["udp_port"] = localPort;
+    doc["firmware"] = "1.3-wifi-stream";
+    String payload;
+    serializeJson(doc, payload);
+
+    udp.beginPacket(udp.remoteIP(), udp.remotePort());
+    udp.write((const uint8_t *)payload.c_str(), payload.length());
+    udp.endPacket();
+    Serial.printf("Discovery response sent: %s\n", payload.c_str());
+}
+
+String sanitize_mdns_hostname(const String &name)
+{
+    String host = name;
+    host.trim();
+    if (host.length() == 0)
+        host = "esp32audio";
+    for (size_t i = 0; i < host.length(); ++i)
+    {
+        char c = host.charAt(i);
+        if (!isalnum(c) && c != '-')
+            host.setCharAt(i, '-');
+    }
+    return host;
+}
+
+void init_mdns()
+{
+    String host = sanitize_mdns_hostname(ap_name);
+    if (!MDNS.begin(host.c_str()))
+    {
+        Serial.println("mDNS init failed");
+        return;
+    }
+    MDNS.addService("esp32audio", "udp", localPort);
+    MDNS.addService("http", "tcp", 80);
+    Serial.printf("mDNS started: %s.local\n", host.c_str());
+}
+
 bool play_track_by_index(uint16_t audio_to_play)
 {
     if (!allow_play_over_playing && audio.isRunning())
@@ -1418,6 +1715,8 @@ bool play_track_by_index(uint16_t audio_to_play)
 
         Serial.printf("Playing : %s\n", target_path.c_str());
         audio.connecttoFS(SD, target_path.c_str());
+        audioSource = AUDIO_SOURCE_SD;
+        stream_url = "";
         if (loop_file)
         {
             audio.setFileLoop(true);
@@ -1875,6 +2174,12 @@ void handleSettings(AsyncWebServerRequest *request, uint8_t *data, size_t len, s
     String previous_ap_name = ap_name;
     String previous_ap_password = ap_password;
     String previous_ap_ip_config = ap_ip_config;
+    String previous_sta_ssid = sta_ssid;
+    String previous_sta_password = sta_password;
+    bool previous_sta_use_dhcp = sta_use_dhcp;
+    String previous_sta_ip_config = sta_ip_config;
+    String previous_sta_gateway_config = sta_gateway_config;
+    String previous_sta_subnet_config = sta_subnet_config;
     uint8_t previous_device_mode = device_mode;
     uint16_t previous_ap_safety_timeout_s = ap_safety_timeout_s;
     uint8_t previous_channel = esp_now_channel;
@@ -1891,6 +2196,12 @@ void handleSettings(AsyncWebServerRequest *request, uint8_t *data, size_t len, s
                            previous_ap_name != ap_name ||
                            previous_ap_password != ap_password ||
                            previous_ap_ip_config != ap_ip_config ||
+                           previous_sta_ssid != sta_ssid ||
+                           previous_sta_password != sta_password ||
+                           previous_sta_use_dhcp != sta_use_dhcp ||
+                           previous_sta_ip_config != sta_ip_config ||
+                           previous_sta_gateway_config != sta_gateway_config ||
+                           previous_sta_subnet_config != sta_subnet_config ||
                            previous_device_mode != device_mode ||
                            previous_ap_safety_timeout_s != ap_safety_timeout_s ||
                            previous_channel != esp_now_channel ||
@@ -2185,7 +2496,12 @@ void setup()
     sanitize_network_settings();
     apply_button_input_config();
     apply_pcf_input_config();
-    if (is_ap_enabled_mode(device_mode))
+    if (device_mode == DEVICE_MODE_AP_STA_CLIENT)
+    {
+        start_soft_ap_runtime();
+        connect_wifi_sta_runtime();
+    }
+    else if (is_ap_enabled_mode(device_mode))
     {
         start_soft_ap_runtime();
     }
@@ -2217,6 +2533,9 @@ void setup()
     if (DEBUG)
     {
         Serial.printf("Device mode: %u\n", device_mode);
+        Serial.printf("STA SSID: %s\n", sta_ssid.c_str());
+        Serial.printf("STA connected: %s\n", sta_connected ? "yes" : "no");
+        Serial.printf("STA IP: %s\n", sta_ip.c_str());
         Serial.printf("AP SSID: %s\n", ap_ssid.c_str());
         Serial.printf("AP Password: %s\n", ap_password.c_str());
         Serial.printf("AP IP: %s\n", ap_ip.c_str());
@@ -2239,6 +2558,13 @@ void setup()
               request->send(200, "application/json", local_vars_to_json()); });
     server.on("/health", HTTP_GET, [](AsyncWebServerRequest *request)
               { request->send(200, "application/json", "{\"ok\":true}"); });
+    server.on("/stream/status", HTTP_GET, [](AsyncWebServerRequest *request)
+              { request->send(200, "application/json", stream_status_json()); });
+    server.on("/stream/stop", HTTP_POST, [](AsyncWebServerRequest *request)
+              {
+                  stop_playback();
+                  request->send(200, "application/json", stream_status_json());
+              });
     server.on(
         "/play", HTTP_POST, [](AsyncWebServerRequest *request) {}, NULL, handlePlay);
     server.on(
@@ -2267,6 +2593,7 @@ void setup()
     server.onNotFound(handleRequest);
 
     server.begin();
+    init_mdns();
 
     audio.setPinout(I2S_BCLK, I2S_LRC, I2S_DOUT);
     update_music_from_sd();
@@ -2287,7 +2614,7 @@ void setup()
 bool need_to_play = true;
 
 uint16_t current_Volume = 4095;
-char packetBuffer[255]; // Incoming
+char packetBuffer[512]; // Incoming UDP (URLs for stream command)
 
 // Méthode pour découper le message avec un séparateur (ou "parser")
 void splitString(String message, char separator, String data[5])
@@ -2339,14 +2666,31 @@ void loop()
     int packetSize = udp.parsePacket();
     if (packetSize)
     {
-        // Read the packet into packetBuffer
-        int len = udp.read(packetBuffer, 255);
+        int len = udp.read(packetBuffer, sizeof(packetBuffer) - 1);
         if (len > 0)
         {
             packetBuffer[len] = 0;
         }
         Serial.printf("Data : %s\n", packetBuffer);
         String strData(packetBuffer);
+        strData.trim();
+
+        if (strData == "?" || strData.startsWith("?"))
+        {
+            send_udp_discovery_response();
+        }
+        else if (strData == "X" || strData.startsWith("X"))
+        {
+            stop_playback();
+        }
+        else if (strData.startsWith("S "))
+        {
+            String url = strData.substring(2);
+            url.trim();
+            play_stream_by_url(url);
+        }
+        else
+        {
         String data[5]; // Store incoming data
 
         splitString(strData, ' ', data);
@@ -2449,6 +2793,7 @@ void loop()
             //"0" to "N" number of tracks in playlist
             uint16_t audio_to_play = data[0].toInt();
             play_track_by_index(audio_to_play);
+        }
         }
     }
 }

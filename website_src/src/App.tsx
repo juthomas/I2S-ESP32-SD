@@ -53,6 +53,14 @@ export interface Data {
   ap_safety_timeout_s?: number;
   allow_play_over_playing?: boolean;
   ap_runtime_enabled?: boolean;
+  sta_ssid?: string;
+  sta_password?: string;
+  sta_use_dhcp?: boolean;
+  sta_ip_config?: string;
+  sta_gateway_config?: string;
+  sta_subnet_config?: string;
+  sta_ip?: string;
+  sta_connected?: boolean;
   button_gpio13_track?: number;
   button_gpio16_track?: number;
   button_gpio13_pull_mode?: number;
@@ -90,6 +98,12 @@ function App() {
   const dataFetchInFlightRef = useRef(false);
   const previousConnectionStateRef = useRef<ConnectionState>("checking");
   const wifiName = data?.ap_ssid?.trim() ? data.ap_ssid : t("App.unavailable");
+  const staLabel =
+    data?.sta_connected && data?.sta_ip?.trim()
+      ? data.sta_ip
+      : data?.sta_ssid?.trim()
+      ? data.sta_ssid
+      : null;
   const connectionStatusLabel =
     connectionState === "online"
       ? t("App.connectionOnline")
@@ -307,6 +321,11 @@ function App() {
               <Text size="xs" c={connectionStatusColor}>
                 {t("App.connectionStatus")}: {connectionStatusLabel}
               </Text>
+              {staLabel && (
+                <Text size="xs" c="dimmed">
+                  {data?.sta_connected ? t("App.staConnected") : t("App.staNotConnected")}: {staLabel}
+                </Text>
+              )}
             </Stack>
           ) : (
             <Group position="apart" sx={{ height: "100%", flexWrap: "nowrap" }}>
@@ -331,6 +350,15 @@ function App() {
                 >
                   {wifiName}
                 </Badge>
+                {staLabel && (
+                  <Badge
+                    variant={data?.sta_connected ? "filled" : "outline"}
+                    color={data?.sta_connected ? "blue" : "gray"}
+                    title={staLabel}
+                  >
+                    {data?.sta_connected ? t("App.staConnected") : t("App.staNotConnected")}: {staLabel}
+                  </Badge>
+                )}
                 <Badge color={connectionStatusColor} variant="light">
                   {t("App.connectionStatus")}: {connectionStatusLabel}
                 </Badge>
